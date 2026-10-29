@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../domain/models/data_plan_session.dart';
@@ -55,7 +57,9 @@ class GemmaService {
     http.Client? httpClient,
     MegaCalculator? calculator,
   }) : _http = httpClient ?? http.Client(),
-       _calculator = calculator ?? const MegaCalculator();
+       _calculator = calculator ?? const MegaCalculator() {
+    _loadEnv();
+  }
 
   final http.Client _http;
   final MegaCalculator _calculator;
@@ -65,6 +69,42 @@ class GemmaService {
   String ollamaModel = 'gemma4:e4b';
   String googleAiStudioApiKey = '';
   String googleAiStudioModel = 'gemma-4-12b-it';
+
+  void _loadEnv() {
+    // 1. Try compile-time environment define (--dart-define / --dart-define-from-file=.env)
+    const compileKey = String.fromEnvironment('GOOGLE_AI_STUDIO_API_KEY');
+    if (compileKey.isNotEmpty) {
+      googleAiStudioApiKey = compileKey;
+    }
+    const compileModel = String.fromEnvironment('GEMMA_MODEL');
+    if (compileModel.isNotEmpty) {
+      googleAiStudioModel = compileModel;
+    }
+
+    // 2. Fallback: Parse .env file from disk if accessible
+    if (!kIsWeb && googleAiStudioApiKey.isEmpty) {
+      try {
+        final envFile = File('.env');
+        if (envFile.existsSync()) {
+          final lines = envFile.readAsLinesSync();
+          for (final line in lines) {
+            final trimmed = line.trim();
+            if (trimmed.startsWith('#') || !trimmed.contains('=')) continue;
+            final idx = trimmed.indexOf('=');
+            final key = trimmed.substring(0, idx).trim();
+            final value = trimmed.substring(idx + 1).trim();
+            if (key == 'GOOGLE_AI_STUDIO_API_KEY' && value.isNotEmpty) {
+              googleAiStudioApiKey = value;
+            } else if (key == 'GEMMA_MODEL' && value.isNotEmpty) {
+              googleAiStudioModel = value;
+            }
+          }
+        }
+      } catch (_) {
+        // Ignore file system errors
+      }
+    }
+  }
 
   /// Parses an operator SMS or USSD message (Camtel, MTN, Orange, Yoomee) into
   /// a structured [ParsedSmsPlan] using Gemma 4 JSON output.
