@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Emerald Radar Ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00F5A0"
+        android:strokeWidth="2.6"
+        android:pathData="M54,54m-26,0a26,26 0,1 1,52 0a26,26 0,1 1,-52 0" />
+    <!-- Inner Cyan Telemetry Ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1.6"
+        android:pathData="M54,54m-17,0a17,17 0,1 1,34 0a17,17 0,1 1,-34 0" />
+    <!-- Cardinal Tick Marks -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#F8FAFC"
+        android:strokeWidth="2.4"
+        android:pathData="M54,24L54,30M54,78L54,84M24,54L30,54M78,54L84,54" />
+    <!-- Wayfinder Compass North/Target Spear (Emerald) -->
+    <path
+        android:fillColor="#00F5A0"
+        android:pathData="M54,31L61,54L54,49L47,54Z" />
+    <!-- Wayfinder Compass South Tail (Slate/Rose) -->
+    <path
+        android:fillColor="#F43F5E"
+        android:pathData="M54,77L60,54L54,59L48,54Z" />
+    <!-- Center Pivot Core -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M54,54m-3.2,0a3.2,3.2 0,1 1,6.4 0a3.2,3.2 0,1 1,-6.4 0" />
+</vector>
