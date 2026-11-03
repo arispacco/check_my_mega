@@ -5,8 +5,9 @@ import '../view_models/audit_view_model.dart';
 import 'gemma_report_tab.dart';
 import 'isp_comparison_tab.dart';
 import 'live_audit_tab.dart';
+import 'signal_compass_tab.dart';
 
-/// Main responsive application shell for **CheckMyMega**.
+/// Main responsive application shell for **CheckMyMega CM**.
 class CheckMyMegaShell extends StatefulWidget {
   const CheckMyMegaShell({super.key, required this.viewModel});
 
@@ -24,37 +25,66 @@ class _CheckMyMegaShellState extends State<CheckMyMegaShell> {
     return ListenableBuilder(
       listenable: widget.viewModel,
       builder: (context, _) {
+        final rsrp = widget.viewModel.radioSnapshot?.rsrpDbm;
         return Scaffold(
           appBar: AppBar(
+            toolbarHeight: 64,
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(1),
+              child: Container(
+                height: 1,
+                color: AppTheme.borderSubtle.withValues(alpha: 0.8),
+              ),
+            ),
             title: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
-                    color: AppTheme.emerald.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(10),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppTheme.neonEmerald.withValues(alpha: 0.25),
+                        AppTheme.sky.withValues(alpha: 0.15),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: AppTheme.neonEmerald.withValues(alpha: 0.5),
+                    ),
                   ),
                   child: const Icon(
-                    Icons.network_check_rounded,
-                    color: AppTheme.emerald,
-                    size: 22,
+                    Icons.radar_rounded,
+                    color: AppTheme.neonEmerald,
+                    size: 21,
                   ),
                 ),
-                const SizedBox(width: 12),
-                const Expanded(
+                const SizedBox(width: 11),
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      const Text(
                         'CheckMyMega CM',
                         style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 17,
+                          letterSpacing: -0.3,
+                          color: AppTheme.textPrimary,
                         ),
                       ),
                       Text(
-                        'Auditeur Citoyen de Forfaits Internet × Google Gemma 4',
-                        style: TextStyle(fontSize: 11, color: Colors.white60),
+                        rsrp != null
+                            ? '${widget.viewModel.detectedCarrierName} • $rsrp dBm'
+                            : 'Auditeur Réseau & Radar 4G × Gemma 4',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
@@ -63,19 +93,37 @@ class _CheckMyMegaShellState extends State<CheckMyMegaShell> {
             ),
             actions: [
               Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: Chip(
-                  avatar: const Icon(
-                    Icons.bolt_rounded,
-                    size: 16,
-                    color: AppTheme.emerald,
+                padding: const EdgeInsets.only(right: 14),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
                   ),
-                  label: Text(
-                    widget.viewModel.gemmaService.ollamaModel,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.cardElevated,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppTheme.borderHighlight),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        widget.viewModel.gemmaService.isOllamaReachable
+                            ? Icons.bolt_rounded
+                            : Icons.shield_outlined,
+                        size: 14,
+                        color: AppTheme.neonEmerald,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        widget.viewModel.gemmaService.statusChipLabel,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -88,46 +136,62 @@ class _CheckMyMegaShellState extends State<CheckMyMegaShell> {
                 viewModel: widget.viewModel,
                 onNavigateToReport: () {
                   setState(() {
-                    _selectedIndex = 2;
+                    _selectedIndex = 3;
                   });
                 },
               ),
+              SignalCompassTab(viewModel: widget.viewModel),
               IspComparisonTab(
                 viewModel: widget.viewModel,
                 onInspectSessionReport: (session) {
                   widget.viewModel.selectSessionForReport(session);
                   setState(() {
-                    _selectedIndex = 2;
+                    _selectedIndex = 3;
                   });
                 },
               ),
               GemmaReportTab(viewModel: widget.viewModel),
             ],
           ),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (idx) {
-              setState(() {
-                _selectedIndex = idx;
-              });
-            },
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.speed_outlined),
-                selectedIcon: Icon(Icons.speed_rounded),
-                label: 'Sonde OS Live',
+          bottomNavigationBar: Container(
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(
+                  color: AppTheme.borderSubtle.withValues(alpha: 0.85),
+                  width: 1,
+                ),
               ),
-              NavigationDestination(
-                icon: Icon(Icons.compare_arrows_outlined),
-                selectedIcon: Icon(Icons.compare_arrows_rounded),
-                label: 'Camtel vs MTN vs Orange',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.verified_outlined),
-                selectedIcon: Icon(Icons.verified_rounded),
-                label: 'Certificat Gemma 4',
-              ),
-            ],
+            ),
+            child: NavigationBar(
+              selectedIndex: _selectedIndex,
+              onDestinationSelected: (idx) {
+                setState(() {
+                  _selectedIndex = idx;
+                });
+              },
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.speed_outlined),
+                  selectedIcon: Icon(Icons.speed_rounded),
+                  label: 'Sonde & SMS',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.explore_outlined),
+                  selectedIcon: Icon(Icons.explore_rounded),
+                  label: 'Boussole & Débit',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.compare_arrows_outlined),
+                  selectedIcon: Icon(Icons.compare_arrows_rounded),
+                  label: 'Historique FAI',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.verified_outlined),
+                  selectedIcon: Icon(Icons.verified_rounded),
+                  label: 'Certificat IA',
+                ),
+              ],
+            ),
           ),
         );
       },

@@ -4,8 +4,7 @@ import '../../../../domain/models/data_plan_session.dart';
 import '../../../core/theme/app_theme.dart';
 import '../view_models/audit_view_model.dart';
 
-/// Tab 2: Side-by-side comparison of Cameroon ISPs (Camtel 100F vs MTN 500F vs Orange 500F)
-/// for the exact same workload ("Même Travail").
+/// Tab 3: Mobile-First Visual Comparator of Recorded SIM Audits & National ISP Benchmarks.
 class IspComparisonTab extends StatelessWidget {
   const IspComparisonTab({
     super.key,
@@ -22,162 +21,62 @@ class IspComparisonTab extends StatelessWidget {
     final calc = viewModel.calculator;
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Row(
-                  children: [
-                    Icon(Icons.balance_rounded, color: AppTheme.emerald),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Comparateur Multi-FAI : Protocole « Même Travail » (1 Go)',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                        ),
+        GlassTelemetryCard(
+          accentColor: AppTheme.sky,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const TelemetrySectionHeader(
+                icon: Icons.balance_rounded,
+                title: 'Historique de Mes Audits & Comparateur',
+                subtitle:
+                    'Vos vraies sessions mesurées sur carte SIM vs repères nationaux',
+                accentColor: AppTheme.sky,
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppTheme.obsidianBg.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.borderSubtle),
+                ),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: AppTheme.neonEmerald,
+                    title: const Text(
+                      'Afficher les repères nationaux (MTN / Orange / Camtel)',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Pourquoi un forfait de 1 Go à 500 FCFA chez MTN ou Orange finit-il avant le 1 Go à 100 FCFA (3h) de Camtel pour exactement le même travail ? Voici la vérité mesurée au niveau de la carte réseau du téléphone :',
-                  style: TextStyle(fontSize: 13, color: Colors.white70),
-                ),
-                const SizedBox(height: 16),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(Colors.white10),
-                    columns: const [
-                      DataColumn(label: Text('Opérateur (FAI)')),
-                      DataColumn(label: Text('Prix Payé')),
-                      DataColumn(label: Text('Promis')),
-                      DataColumn(label: Text('Reçu par l\'OS')),
-                      DataColumn(label: Text('Mégas Perdus')),
-                      DataColumn(label: Text('Taux Vérité')),
-                      DataColumn(label: Text('Vrai Prix / Go')),
-                      DataColumn(label: Text('Rapport IA')),
-                    ],
-                    rows: sessions.map((s) {
-                      final measuredMb = calc.bytesToDecimalMb(
-                        s.totalConsumedBytes,
-                      );
-                      final missingMb = calc.computeMissingMb(
-                        totalConsumedBytes: s.totalConsumedBytes,
-                        promisedMb: s.promisedMb,
-                      );
-                      final scorePct = calc.computeVeracityScorePct(
-                        totalConsumedBytes: s.totalConsumedBytes,
-                        promisedMb: s.promisedMb,
-                      );
-                      final realCost = calc.computeRealCostPerGbXaf(
-                        priceXaf: s.priceXaf,
-                        totalConsumedBytes: s.totalConsumedBytes,
-                      );
-
-                      final scoreColor = scorePct >= 90
-                          ? AppTheme.emerald
-                          : (scorePct >= 75
-                                ? AppTheme.amber
-                                : AppTheme.crimson);
-
-                      return DataRow(
-                        cells: [
-                          DataCell(
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                CircleAvatar(
-                                  backgroundColor: s.isp.brandColor,
-                                  radius: 6,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  s.isp.displayName,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          DataCell(Text('${s.priceXaf} FCFA')),
-                          DataCell(Text('${s.promisedMb.toStringAsFixed(0)} Mo')),
-                          DataCell(
-                            Text(
-                              '${measuredMb.toStringAsFixed(1)} Mo',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Text(
-                              '-${missingMb.toStringAsFixed(1)} Mo',
-                              style: TextStyle(
-                                color: missingMb > 150
-                                    ? AppTheme.crimson
-                                    : Colors.white70,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: scoreColor.withValues(alpha: 0.18),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                '${scorePct.toStringAsFixed(1)}%',
-                                style: TextStyle(
-                                  color: scoreColor,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Text(
-                              '${realCost.toStringAsFixed(0)} FCFA/Go',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            TextButton.icon(
-                              icon: const Icon(
-                                Icons.description_outlined,
-                                size: 16,
-                              ),
-                              label: const Text('Voir Audit'),
-                              onPressed: () => onInspectSessionReport(s),
-                            ),
-                          ),
-                        ],
-                      );
-                    }).toList(),
+                    subtitle: Text(
+                      'SIM détectée : ${viewModel.detectedCarrierName}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    value: viewModel.showReferenceBenchmarks,
+                    onChanged: viewModel.toggleReferenceBenchmarks,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
 
-        // Visual Bar Comparison Cards
+        // Mobile-First Visual Audit Scorecards
         ...sessions.map((s) {
           final measuredMb = calc.bytesToDecimalMb(s.totalConsumedBytes);
           final scorePct = calc.computeVeracityScorePct(
@@ -193,75 +92,142 @@ class IspComparisonTab extends StatelessWidget {
             totalConsumedBytes: s.totalConsumedBytes,
           );
 
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+          final scoreColor = scorePct >= 90
+              ? AppTheme.neonEmerald
+              : (scorePct >= 75 ? AppTheme.amber : AppTheme.crimson);
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: GlassTelemetryCard(
+              accentColor: s.isp.brandColor,
+              padding: const EdgeInsets.all(18),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
                       Container(
-                        width: 12,
-                        height: 12,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
-                          color: s.isp.brandColor,
-                          shape: BoxShape.circle,
+                          color: s.isp.brandColor.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: s.isp.brandColor.withValues(alpha: 0.6),
+                          ),
+                        ),
+                        child: Text(
+                          s.isp.displayName,
+                          style: TextStyle(
+                            color: s.isp.brandColor,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11.5,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '${s.isp.displayName} — ${s.planName} (${s.priceXaf} FCFA)',
+                          '${s.planName} (${s.priceXaf} FCFA)',
                           style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14,
+                            color: AppTheme.textPrimary,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      Text(
-                        'Coût réel : ${realCost.toStringAsFixed(0)} FCFA / Go livré',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.emerald,
-                          fontWeight: FontWeight.bold,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: scoreColor.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '${scorePct.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            color: scoreColor,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 14),
+
+                  // Progress Bar
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: LinearProgressIndicator(
-                      value: (measuredMb / s.promisedMb).clamp(0.0, 1.0),
-                      minHeight: 12,
+                      value: (measuredMb / s.promisedMb).clamp(0.02, 1.0),
+                      minHeight: 10,
                       backgroundColor: Colors.white10,
                       valueColor: AlwaysStoppedAnimation<Color>(
                         s.isp.brandColor,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+
+                  // 3-Column Metric Strip
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _MiniCompareStat(
+                          label: 'REÇU / PROMIS',
+                          value:
+                              '${measuredMb.toStringAsFixed(1)} / ${s.promisedMb.toStringAsFixed(0)} Mo',
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      Expanded(
+                        child: _MiniCompareStat(
+                          label: 'ÉCART NON REÇU',
+                          value: '-${missingMb.toStringAsFixed(1)} Mo',
+                          color: missingMb > 150
+                              ? AppTheme.crimson
+                              : AppTheme.textSecondary,
+                        ),
+                      ),
+                      Expanded(
+                        child: _MiniCompareStat(
+                          label: 'VRAI PRIX / GO',
+                          value: '${realCost.toStringAsFixed(0)} FCFA',
+                          color: AppTheme.neonEmerald,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Footer Action Row
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Reçu OS : ${measuredMb.toStringAsFixed(1)} Mo / ${s.promisedMb.toStringAsFixed(0)} Mo (${scorePct.toStringAsFixed(1)}%)',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white70,
+                      Flexible(
+                        child: Text(
+                          s.workloadTag,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textSecondary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      Text(
-                        'Écart : -${missingMb.toStringAsFixed(1)} Mo non reçus',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: missingMb > 150
-                              ? AppTheme.crimson
-                              : Colors.white54,
-                          fontWeight: FontWeight.w600,
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppTheme.neonEmerald,
+                          visualDensity: VisualDensity.compact,
                         ),
+                        icon: const Icon(Icons.verified_outlined, size: 16),
+                        label: const Text('Certificat IA'),
+                        onPressed: () => onInspectSessionReport(s),
                       ),
                     ],
                   ),
@@ -270,6 +236,46 @@ class IspComparisonTab extends StatelessWidget {
             ),
           );
         }),
+      ],
+    );
+  }
+}
+
+class _MiniCompareStat extends StatelessWidget {
+  const _MiniCompareStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 9.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.5,
+            color: AppTheme.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
       ],
     );
   }

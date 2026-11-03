@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../../../../domain/models/data_plan_session.dart';
 import '../../../../domain/models/isp_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../view_models/audit_view_model.dart';
 import 'widgets/mega_gauge_card.dart';
 import 'widgets/sms_parser_dialog.dart';
 
-/// Tab 1: Real-time OS Network Metering, Workload Calibration, and Per-App Breakdown.
+/// Tab 1: Real-time OS Network Metering, Live SMS Inbox Timeline, and Per-App Breakdown.
 class LiveAuditTab extends StatelessWidget {
   const LiveAuditTab({
     super.key,
@@ -26,41 +25,61 @@ class LiveAuditTab extends StatelessWidget {
     }
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
       children: [
+        // Android 13+ Restricted Settings Helper Banner (only shown if permission missing)
         if (!viewModel.hasOsPermission)
-          Container(
-            margin: const EdgeInsets.only(bottom: 14),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppTheme.amber.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.amber),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.security_update_good, color: AppTheme.amber),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    'Permission Android requise : Autorisez "Accès aux données d\'utilisation" pour lire NetworkStatsManager par application.',
-                    style: TextStyle(fontSize: 13),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: GlassTelemetryCard(
+              accentColor: AppTheme.amber,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const TelemetrySectionHeader(
+                    icon: Icons.security_update_good_rounded,
+                    title: 'Autorisation Système Android 13+',
+                    subtitle:
+                        'Débloquez l\'accès aux compteurs matériels NetworkStatsManager en 2 étapes',
+                    accentColor: AppTheme.amber,
                   ),
-                ),
-                FilledButton.tonal(
-                  onPressed: viewModel.checkAndOpenOsPermissions,
-                  child: const Text('Autoriser OS'),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.settings_applications, size: 16),
+                        label: const Text('1. Débloquer (Menu ⋮)'),
+                        onPressed:
+                            viewModel.openAppDetailsForRestrictedSettings,
+                      ),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.lock_open_rounded, size: 16),
+                        label: const Text('2. Activer Accès Usage'),
+                        onPressed: viewModel.checkAndOpenOsPermissions,
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.refresh_rounded, size: 16),
+                        label: const Text('Vérifier'),
+                        onPressed: viewModel.refreshPermissionState,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
+
+        // Live Status Notification Pill
         if (viewModel.statusBannerMessage != null)
           Container(
             margin: const EdgeInsets.only(bottom: 14),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             decoration: BoxDecoration(
-              color: AppTheme.emerald.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
+              color: AppTheme.emerald.withValues(alpha: 0.11),
+              borderRadius: BorderRadius.circular(16),
               border: Border.all(
                 color: AppTheme.emerald.withValues(alpha: 0.4),
               ),
@@ -68,273 +87,401 @@ class LiveAuditTab extends StatelessWidget {
             child: Row(
               children: [
                 const Icon(
-                  Icons.info_outline_rounded,
+                  Icons.bolt_rounded,
                   size: 18,
-                  color: AppTheme.emerald,
+                  color: AppTheme.neonEmerald,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     viewModel.statusBannerMessage!,
-                    style: const TextStyle(fontSize: 13),
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
 
-        // Quick FAI Switcher & Gemma 4 SMS Scanner
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        '1. Sélectionner ou Scanner un Forfait à Auditer',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                    FilledButton.icon(
-                      icon: const Icon(Icons.sms_outlined, size: 18),
-                      label: const Text('Scanner SMS avec Gemma 4'),
-                      onPressed: () {
-                        showDialog<void>(
-                          context: context,
-                          builder: (_) => SmsParserDialog(viewModel: viewModel),
-                        );
-                      },
-                    ),
-                  ],
+        // 1. HERO RADIAL GAUGE CARD (Top Priority Visual)
+        MegaGaugeCard(session: session, calculator: viewModel.calculator),
+        const SizedBox(height: 16),
+
+        // 2. Active Plan & SMS Synchronization Controls
+        GlassTelemetryCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TelemetrySectionHeader(
+                icon: Icons.sim_card_download_rounded,
+                title: 'Forfait & Synchronisation SMS',
+                subtitle:
+                    'SIM active : ${viewModel.detectedCarrierName} • Détection automatique des forfaits cumulés',
+                accentColor: AppTheme.sky,
+                trailing: IconButton.outlined(
+                  tooltip: 'Analyser un SMS manuellement avec Gemma 4',
+                  icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                  onPressed: () {
+                    showDialog<void>(
+                      context: context,
+                      builder: (_) => SmsParserDialog(viewModel: viewModel),
+                    );
+                  },
                 ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
+              ),
+              const SizedBox(height: 14),
+
+              // Horizontal Plan Presets Carousel
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
                   children: [
-                    _QuickPlanButton(
+                    _QuickPlanChip(
                       isp: IspProvider.camtel,
-                      label: 'Camtel 1Go • 100 FCFA (3h)',
-                      isSelected: session.isp == IspProvider.camtel,
+                      label: 'Blue 1Go • 100F (3h)',
+                      isSelected:
+                          session.isp == IspProvider.camtel &&
+                          session.priceXaf == 100,
                       onTap: () => viewModel.startAuditSession(
                         isp: IspProvider.camtel,
-                        planName: 'Blue Horaire 1Go (3h)',
+                        planName: 'Blue mo S 1Go (3h)',
                         promisedMb: 1024,
                         priceXaf: 100,
                         validityHours: 3,
                       ),
                     ),
-                    _QuickPlanButton(
-                      isp: IspProvider.mtnCm,
-                      label: 'MTN 1Go • 500 FCFA (24h)',
-                      isSelected: session.isp == IspProvider.mtnCm,
+                    const SizedBox(width: 8),
+                    _QuickPlanChip(
+                      isp: IspProvider.camtel,
+                      label: 'Blue 2Go • 300F (24h)',
+                      isSelected:
+                          session.isp == IspProvider.camtel &&
+                          session.priceXaf == 300,
                       onTap: () => viewModel.startAuditSession(
-                        isp: IspProvider.mtnCm,
-                        planName: 'Mobile Surf / Wanda 1Go',
-                        promisedMb: 1024,
-                        priceXaf: 500,
+                        isp: IspProvider.camtel,
+                        planName: 'Blue Jour 2Go (24h)',
+                        promisedMb: 2048,
+                        priceXaf: 300,
                         validityHours: 24,
                       ),
-                    ),
-                    _QuickPlanButton(
-                      isp: IspProvider.orangeCm,
-                      label: 'Orange 1Go • 500 FCFA (24h)',
-                      isSelected: session.isp == IspProvider.orangeCm,
-                      onTap: () => viewModel.startAuditSession(
-                        isp: IspProvider.orangeCm,
-                        planName: 'Forfait Internet 1Go Jour',
-                        promisedMb: 1024,
-                        priceXaf: 500,
-                        validityHours: 24,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-
-        // Main OS Gauge Card
-        MegaGaugeCard(session: session, calculator: viewModel.calculator),
-        const SizedBox(height: 14),
-
-        // Calibrated Workload ("Même Travail") & Exhaustion Trigger
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '2. Protocole « Même Travail » & Clôture du Forfait',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Enregistre la consommation système en direct ou injecte une charge de travail reproductible avant de déclarer la coupure du forfait par le FAI :',
-                  style: TextStyle(fontSize: 12, color: Colors.white60),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.add_chart_rounded, size: 18),
-                      label: const Text('+50 Mo (Travail Standard)'),
-                      onPressed: session.status == AuditSessionStatus.active
-                          ? () => viewModel.injectCalibratedWorkload(
-                              mbAmount: 50,
-                            )
-                          : null,
-                    ),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.speed_rounded, size: 18),
-                      label: const Text('+200 Mo (Streaming / Dev)'),
-                      onPressed: session.status == AuditSessionStatus.active
-                          ? () => viewModel.injectCalibratedWorkload(
-                              mbAmount: 200,
-                            )
-                          : null,
-                    ),
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppTheme.crimson,
-                        foregroundColor: Colors.white,
-                      ),
-                      icon: viewModel.isBusyGemma
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.gavel_rounded, size: 18),
-                      label: const Text(
-                        'Forfait Coupé par le FAI → Générer Audit Gemma 4',
-                      ),
-                      onPressed: viewModel.isBusyGemma
-                          ? null
-                          : () async {
-                              await viewModel.triggerIspExhaustionAndAudit();
-                              onNavigateToReport();
-                            },
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-
-        // Per-Application Breakdown (Proof of No Background Leak)
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.apps_rounded,
-                      size: 20,
-                      color: AppTheme.emerald,
                     ),
                     const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        '3. Ventilation Système par Application (NetworkStatsManager UID)',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      'Couverture OS : ${viewModel.calculator.computeAppAccountingCoveragePct(session).toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.emerald,
-                        fontWeight: FontWeight.bold,
+                    _QuickPlanChip(
+                      isp: IspProvider.camtel,
+                      label: 'Blue 3Go • 250F (Nuit)',
+                      isSelected:
+                          session.isp == IspProvider.camtel &&
+                          session.priceXaf == 250,
+                      onTap: () => viewModel.startAuditSession(
+                        isp: IspProvider.camtel,
+                        planName: 'Blue Night 3Go',
+                        promisedMb: 3072,
+                        priceXaf: 250,
+                        validityHours: 6,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Prouve qu\'aucune application cachée n\'a volé les mégas en arrière-plan pendant le test :',
-                  style: TextStyle(fontSize: 12, color: Colors.white60),
-                ),
-                const SizedBox(height: 12),
-                if (session.appUsages.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      'Aucune donnée consommée sur cette session pour l\'instant.',
+              ),
+              const SizedBox(height: 14),
+
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton.icon(
+                    icon: const Icon(Icons.sync_rounded, size: 17),
+                    label: const Text('Synchroniser Boîte SMS'),
+                    onPressed: viewModel.syncFromSmsInbox,
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.history_rounded, size: 17),
+                    label: Text('Fenêtre ${session.validityHours}h'),
+                    onPressed: () => viewModel.startAuditSession(
+                      isp: session.isp,
+                      planName: session.planName,
+                      promisedMb: session.promisedMb,
+                      priceXaf: session.priceXaf,
+                      validityHours: session.validityHours,
+                      includePastValidityWindow: true,
                     ),
-                  )
-                else
-                  ...session.appUsages.map((app) {
-                    final share = session.totalConsumedBytes > 0
-                        ? (app.totalBytes / session.totalConsumedBytes).clamp(
-                            0.0,
-                            1.0,
-                          )
-                        : 0.0;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '${app.appName} (${app.packageName})',
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.restart_alt_rounded, size: 17),
+                    label: const Text('Partir de 0 Mo'),
+                    onPressed: () => viewModel.startAuditSession(
+                      isp: session.isp,
+                      planName: session.planName,
+                      promisedMb: session.promisedMb,
+                      priceXaf: session.priceXaf,
+                      validityHours: session.validityHours,
+                      includePastValidityWindow: false,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.crimson,
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: viewModel.isBusyGemma
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.verified_user_rounded, size: 18),
+                  label: const Text(
+                    'Forfait Coupé par le FAI → Générer Certificat IA',
+                  ),
+                  onPressed: viewModel.isBusyGemma
+                      ? null
+                      : () async {
+                          await viewModel.triggerIspExhaustionAndAudit();
+                          onNavigateToReport();
+                        },
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // 3. Real Operator SMS Inbox & Live Interception Timeline
+        if (viewModel.smsInboxMessages.isNotEmpty) ...[
+          GlassTelemetryCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TelemetrySectionHeader(
+                  icon: Icons.mark_chat_read_rounded,
+                  title: 'Chronologie SMS Opérateur',
+                  subtitle:
+                      'Lus depuis content://sms/inbox & interceptés en temps réel',
+                  accentColor: AppTheme.emerald,
+                  trailing: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.emerald.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${viewModel.smsInboxMessages.length} SMS',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.neonEmerald,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                ...viewModel.smsInboxMessages.take(6).map((sms) {
+                  final dt = DateTime.fromMillisecondsSinceEpoch(sms.dateMs);
+                  final timeStr =
+                      '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')} à '
+                      '${dt.hour.toString().padLeft(2, '0')}h${dt.minute.toString().padLeft(2, '0')}';
+                  final badgeColor = sms.isExhaustion
+                      ? AppTheme.crimson
+                      : (sms.isActivation ? AppTheme.neonEmerald : AppTheme.amber);
+                  final badgeLabel = sms.isExhaustion
+                      ? 'COUPURE 0 Mo'
+                      : (sms.isActivation
+                            ? '+${sms.promisedMb.toStringAsFixed(0)} Mo'
+                            : (sms.priceXaf > 0
+                                  ? '${sms.priceXaf} FCFA'
+                                  : 'INFO'));
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 9),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppTheme.obsidianBg.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppTheme.borderSubtle),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  sms.isExhaustion
+                                      ? Icons.portable_wifi_off_rounded
+                                      : Icons.sms_rounded,
+                                  size: 14,
+                                  color: badgeColor,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '${sms.address} • $timeStr',
                                   style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 13,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12,
+                                    color: AppTheme.textPrimary,
                                   ),
                                 ),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
                               ),
-                              Text(
-                                '${app.totalMbDecimal.toStringAsFixed(1)} Mo (${(share * 100).toStringAsFixed(0)}%)',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                  color: Colors.white,
+                              decoration: BoxDecoration(
+                                color: badgeColor.withValues(alpha: 0.16),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: badgeColor.withValues(alpha: 0.45),
                                 ),
                               ),
-                            ],
+                              child: Text(
+                                badgeLabel,
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: badgeColor,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          sms.body,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textSecondary,
+                            height: 1.35,
                           ),
-                          const SizedBox(height: 4),
-                          LinearProgressIndicator(
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        // 4. Per-Application Breakdown (NetworkStatsManager UID)
+        GlassTelemetryCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TelemetrySectionHeader(
+                icon: Icons.layers_rounded,
+                title: 'Ventilation par Application (UID OS)',
+                subtitle:
+                    'Vérifie qu\'aucune tâche cachée n\'a drainé votre forfait en arrière-plan',
+                accentColor: AppTheme.violet,
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.violet.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${viewModel.calculator.computeAppAccountingCoveragePct(session).toStringAsFixed(0)}% tracé',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppTheme.violet,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              if (session.appUsages.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  child: Text(
+                    'Aucune consommation par application détectée sur cette tranche.',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                )
+              else
+                ...session.appUsages.map((app) {
+                  final share = session.totalConsumedBytes > 0
+                      ? (app.totalBytes / session.totalConsumedBytes).clamp(
+                          0.0,
+                          1.0,
+                        )
+                      : 0.0;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppTheme.obsidianBg.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppTheme.borderSubtle),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                app.appName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                  color: AppTheme.textPrimary,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${app.totalMbDecimal.toStringAsFixed(1)} Mo (${(share * 100).toStringAsFixed(0)}%)',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12.5,
+                                color: session.isp.brandColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(5),
+                          child: LinearProgressIndicator(
                             value: share,
                             minHeight: 6,
-                            borderRadius: BorderRadius.circular(4),
                             backgroundColor: Colors.white10,
                             valueColor: AlwaysStoppedAnimation<Color>(
                               session.isp.brandColor,
                             ),
                           ),
-                        ],
-                      ),
-                    );
-                  }),
-              ],
-            ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+            ],
           ),
         ),
       ],
@@ -342,8 +489,8 @@ class LiveAuditTab extends StatelessWidget {
   }
 }
 
-class _QuickPlanButton extends StatelessWidget {
-  const _QuickPlanButton({
+class _QuickPlanChip extends StatelessWidget {
+  const _QuickPlanChip({
     required this.isp,
     required this.label,
     required this.isSelected,
@@ -359,12 +506,22 @@ class _QuickPlanButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return ChoiceChip(
       selected: isSelected,
-      selectedColor: isp.brandColor.withValues(alpha: 0.25),
+      showCheckmark: false,
+      selectedColor: isp.brandColor.withValues(alpha: 0.24),
+      avatar: Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: isp.brandColor,
+          shape: BoxShape.circle,
+        ),
+      ),
       label: Text(
         label,
         style: TextStyle(
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          color: isSelected ? Colors.white : Colors.white70,
+          fontSize: 12.5,
+          fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+          color: isSelected ? AppTheme.textPrimary : AppTheme.textSecondary,
         ),
       ),
       onSelected: (_) => onTap(),
