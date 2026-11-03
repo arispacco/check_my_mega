@@ -40,8 +40,40 @@ void main() {
         expect(mtnScore, lessThan(65.0));
         expect(camtelRealCost, closeTo(101.8, 1.0));
         expect(mtnRealCost, closeTo(783.4, 1.0));
+
+        // Ensure veracity score is strictly capped at 100.0% (no absurd >100% scores)
+        final clampedScore = calculator.computeVeracityScorePct(
+          totalConsumedBytes: 2500000000,
+          promisedMb: 1024,
+        );
+        expect(clampedScore, equals(100.0));
       },
     );
+  });
+
+  group('NativeNetworkService — Real Camtel SMS Inbox Parsing', () {
+    test('parses real Camtel Blue mo S activation and exhaustion SMS', () {
+      final service = NativeNetworkService();
+      final activation = service.parseOperatorSmsRecord(<String, dynamic>{
+        'id': 101,
+        'address': 'CAMTEL',
+        'body':
+            'Felicitations! Vous avez droit a  1024.00 MB  à utiliser avant le 01/11/2026 14:39:03. Pour plus de détails, prière d\'appeler le 828. Merci!',
+        'dateMs': 1761993544432,
+      });
+      expect(activation, isNotNull);
+      expect(activation!.promisedMb, equals(1024.0));
+      expect(activation.isExhaustion, isFalse);
+
+      final exhaustion = service.parseOperatorSmsRecord(<String, dynamic>{
+        'id': 102,
+        'address': 'CAMTEL',
+        'body': 'Your DATA_4G balance is 0 now, please renew it, thank you.',
+        'dateMs': 1761996000000,
+      });
+      expect(exhaustion, isNotNull);
+      expect(exhaustion!.isExhaustion, isTrue);
+    });
   });
 
   group('GemmaService — Operator SMS Extraction', () {
@@ -63,7 +95,7 @@ void main() {
     });
   });
 
-  testWidgets('CheckMyMegaApp renders main shell and navigation tabs', (
+  testWidgets('CheckMyMegaApp renders main shell and 4 navigation tabs', (
     WidgetTester tester,
   ) async {
     final repo = AuditRepository(
@@ -77,9 +109,10 @@ void main() {
     await tester.pump();
 
     expect(find.text('CheckMyMega CM'), findsOneWidget);
-    expect(find.text('Sonde OS Live'), findsOneWidget);
-    expect(find.text('Camtel vs MTN vs Orange'), findsOneWidget);
-    expect(find.text('Certificat Gemma 4'), findsOneWidget);
+    expect(find.text('Sonde & SMS'), findsOneWidget);
+    expect(find.text('Boussole & Débit'), findsOneWidget);
+    expect(find.text('Historique FAI'), findsOneWidget);
+    expect(find.text('Certificat IA'), findsOneWidget);
 
     vm.dispose();
   });
