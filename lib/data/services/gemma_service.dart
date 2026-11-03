@@ -69,6 +69,36 @@ class GemmaService {
   String ollamaModel = 'gemma4:e4b';
   String googleAiStudioApiKey = '';
   String googleAiStudioModel = 'gemma-4-12b-it';
+  bool isOllamaReachable = false;
+
+  /// Probes whether a local Ollama server is reachable on [ollamaBaseUrl].
+  Future<bool> checkOllamaConnection() async {
+    try {
+      final uri = Uri.parse('$ollamaBaseUrl/api/tags');
+      final response = await _http
+          .get(uri)
+          .timeout(const Duration(milliseconds: 1500));
+      isOllamaReachable = response.statusCode == 200;
+    } catch (_) {
+      isOllamaReachable = false;
+    }
+    return isOllamaReachable;
+  }
+
+  /// Human-readable status badge for the AppBar showing the true active engine.
+  String get statusChipLabel {
+    if (backendMode == GemmaBackendMode.ollamaLocal) {
+      return isOllamaReachable
+          ? 'Ollama: $ollamaModel'
+          : 'Moteur Local 0-Data';
+    }
+    if (backendMode == GemmaBackendMode.googleAiStudio) {
+      return googleAiStudioApiKey.trim().isNotEmpty
+          ? 'Cloud: $googleAiStudioModel'
+          : 'Moteur Local 0-Data';
+    }
+    return 'Hors-Ligne 0-Data';
+  }
 
   void _loadEnv() {
     // 1. Try compile-time environment define (--dart-define / --dart-define-from-file=.env)

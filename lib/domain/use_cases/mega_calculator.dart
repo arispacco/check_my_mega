@@ -25,7 +25,7 @@ class MegaCalculator {
     final measured = useBinaryMib
         ? bytesToBinaryMib(totalConsumedBytes)
         : bytesToDecimalMb(totalConsumedBytes);
-    return ((measured / promisedMb) * 100.0).clamp(0.0, 120.0);
+    return ((measured / promisedMb) * 100.0).clamp(0.0, 100.0);
   }
 
   /// Computes the missing ("phantom") megabytes when an ISP marks a plan exhausted.

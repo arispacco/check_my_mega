@@ -81,18 +81,22 @@ enum IspProvider {
 
   static IspProvider fromIdOrText(String value) {
     final normalized = value.toUpperCase();
-    if (normalized.contains('CAMTEL') || normalized.contains('BLUE')) {
+    if (normalized.contains('62405') ||
+        normalized.contains('CAMTEL') ||
+        normalized.contains('BLUE')) {
       return IspProvider.camtel;
     }
-    if (normalized.contains('MTN') || normalized.contains("Y'ELLO")) {
+    if (normalized.contains('62401') ||
+        normalized.contains('MTN') ||
+        normalized.contains("Y'ELLO")) {
       return IspProvider.mtnCm;
     }
-    if (normalized.contains('ORANGE')) {
+    if (normalized.contains('62402') || normalized.contains('ORANGE')) {
       return IspProvider.orangeCm;
     }
     if (normalized.contains('YOOMEE')) {
       return IspProvider.yoomee;
     }
-    return IspProvider.mtnCm;
+    return IspProvider.camtel;
   }
 }
