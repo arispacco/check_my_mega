@@ -182,7 +182,9 @@ data class HouseRadarSpot(
     val altitudeZ: Double,
     val bandLabel: String,
     val isPureRfMeasurement: Boolean,
-    val timestampMs: Long
+    val timestampMs: Long,
+    /** Identifies the dead-reckoning coordinate frame (one per app session until re-anchored). */
+    val frameId: Long = 0L
 ) {
     val compositeScore: Double
         get() {
@@ -193,6 +195,12 @@ data class HouseRadarSpot(
         }
 }
 
+/** Distance (m) under which the user is considered to have reached the saved spot. */
+const val NAV_ARRIVAL_RADIUS_M = 1.2
+
+/** Distance (m) above which an already-reached spot is considered left again (hysteresis). */
+const val NAV_LEAVE_RADIUS_M = 1.8
+
 /** Average walking stride used by the step-based dead reckoning. */
 const val NAV_STRIDE_METERS = 0.72
 
@@ -201,6 +209,20 @@ const val MOTION_THRESHOLD_MS2 = 0.4
 
 /** A step reported more than this long after the last motion is rejected as a false positive. */
 const val STATIONARY_GATE_NS = 1_000_000_000L
+
+/** Number of breadcrumb positions kept for the compass trail. */
+const val TRAIL_MAX_POINTS = 60
+
+/** Live guidance toward the selected saved spot. [relTurnDeg] > 0 means "turn right". */
+data class NavSnapshot(
+    val spot: HouseRadarSpot,
+    val distanceM: Double,
+    val bearingDeg: Double,
+    val relTurnDeg: Double,
+    val arrived: Boolean
+) {
+    val approxSteps: Int get() = (distanceM / NAV_STRIDE_METERS).toInt().coerceAtLeast(0)
+}
 
 class LiveRadioAndSensorState {
     @Volatile var hasSimCard: Boolean = true
