@@ -449,18 +449,7 @@ class MainActivity : Activity() {
         liveBentoLocValTv?.text = "Hauteur Z : ${String.format("%+.1f", st.relativeAltitudeMeters)}m"
         liveBentoLocSubTv?.text = "${st.stepCount} pas • ${st.pressureHpa.roundToInt()} hPa"
 
-        val best = engine.bestSpot()
-        val bearing = engine.bearingToBestSpotDeg()
-        val dist = engine.distanceToBestSpotMeters()
-        if (best != null && bearing != null) {
-            val rel = ((bearing - st.azimuthDeg + 540.0) % 360.0) - 180.0
-            val dirTxt = when {
-                dist < 0.8 || abs(rel) <= 16.0 -> "Aligné plein cap (${String.format("%.1f", dist)}m)"
-                rel > 16.0 -> "Tournez à droite +${rel.roundToInt()}°"
-                else -> "Tournez à gauche ${rel.roundToInt()}°"
-            }
-            liveGuidanceBannerTv?.text = "Meilleur coin : ${best.roomLabel} — $dirTxt (${best.rsrpDbm} dBm • ~${String.format("%.1f", best.speedMbps)} Mbps)"
-        }
+        liveGuidanceBannerTv?.text = guidanceText()
 
         val now = System.currentTimeMillis()
         val needsInitialSessionRender = (engine.activeSession != null && radialGaugeView == null)
@@ -469,6 +458,50 @@ class MainActivity : Activity() {
             if (needsInitialSessionRender || (selectedTabIndex != 1 && selectedTabIndex != 3)) {
                 rebuildAllTabs()
             }
+        }
+    }
+
+    /** Plain-language instruction that mirrors what the compass arrow shows. */
+    private fun guidanceText(): String {
+        val snap = engine.navSnapshot()
+        if (snap == null) {
+            return if (engine.radarSpots.isEmpty()) {
+                "Choisissez un coin ci-dessous puis appuyez sur « Capturer ». La flèche vous y ramènera ensuite."
+            } else {
+                "Ces points datent d'une autre session. Placez-vous sur l'un d'eux et appuyez sur « Je suis ici » pour recaler la boussole."
+            }
+        }
+        val spot = snap.spot
+        val meta = "${spot.rsrpDbm} dBm • ~${String.format("%.1f", spot.speedMbps)} Mbps"
+        val dist = String.format("%.1f", snap.distanceM)
+        val rel = snap.relTurnDeg
+        return when {
+            snap.arrived -> "Vous êtes arrivé à « ${spot.roomLabel} » ($meta). Posez votre téléphone ici."
+            abs(rel) > 135.0 -> "Faites demi-tour — « ${spot.roomLabel} » est à $dist m derrière vous."
+            abs(rel) <= 12.0 -> "Tout droit : « ${spot.roomLabel} » à $dist m (≈ ${snap.approxSteps} pas) • $meta"
+            rel > 0 -> "Tournez à droite de ${abs(rel).roundToInt()}° — « ${spot.roomLabel} » à $dist m • $meta"
+            else -> "Tournez à gauche de ${abs(rel).roundToInt()}° — « ${spot.roomLabel} » à $dist m • $meta"
+        }
+    }
+
+    private fun buildMiniPill(label: String, filled: Boolean, accentHex: String, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = label
+            gravity = Gravity.CENTER
+            textSize = 11.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(if (filled) Color.WHITE else Color.parseColor(accentHex))
+            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            background = if (filled) {
+                pillDrawable(accentHex, accentHex, 16f)
+            } else {
+                pillDrawable(if (isDark) "#0F172A" else "#FFFFFF", accentHex, 16f)
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { rightMargin = dp(8f) }
+            setOnClickListener { onClick() }
         }
     }
 
@@ -850,13 +883,13 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         headCol.addView(TextView(this).apply {
-            text = "Boussole 120 Hz & Meilleur Coin 4G"
+            text = "Boussole de retour au point (120 Hz)"
             setTextColor(textPrimaryCol)
             textSize = 16.5f
             setTypeface(typeface, Typeface.BOLD)
         })
         headCol.addView(TextView(this).apply {
-            text = "Trouvez l'endroit de la maison où le signal SIM passe le mieux"
+            text = "Capturez un coin : la flèche vous y ramène, la distance baisse à chaque pas"
             setTextColor(textSecondaryCol)
             textSize = 12f
         })
@@ -902,13 +935,8 @@ class MainActivity : Activity() {
         compassCard.addView(cView)
         compassCard.addView(spaceView(12f))
 
-        val best = engine.bestSpot()
         liveGuidanceBannerTv = TextView(this).apply {
-            text = if (best != null) {
-                "Meilleur coin identifié : ${best.roomLabel} (${best.rsrpDbm} dBm • ~${String.format("%.1f", best.speedMbps)} Mbps)"
-            } else {
-                "Choisissez ou ajoutez un coin ci-dessous, puis appuyez sur « Capturer Signal »."
-            }
+            text = guidanceText()
             setTextColor(Color.parseColor("#0284C7"))
             textSize = 13f
             setTypeface(typeface, Typeface.BOLD)
@@ -917,6 +945,33 @@ class MainActivity : Activity() {
         }
         compassCard.addView(liveGuidanceBannerTv)
         compassCard.addView(spaceView(14f))
+
+        // Target selector: which saved spot should the arrow lead to?
+        val navSpots = engine.navigableSpots().sortedByDescending { it.compositeScore }
+        if (navSpots.isNotEmpty()) {
+            compassCard.addView(TextView(this).apply {
+                text = "Aller vers :"
+                setTextColor(textSecondaryCol)
+                textSize = 12.5f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, 0, 0, dp(8f))
+            })
+            val targetScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+            val targetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val activeTargetId = engine.navTargetSpot()?.id
+            for (sp in navSpots) {
+                val selected = sp.id == activeTargetId
+                targetRow.addView(
+                    buildMiniPill("${sp.roomLabel} • ${sp.compositeScore.roundToInt()}", selected, "#10B981") {
+                        engine.setNavTarget(sp.id)
+                        rebuildAllTabs()
+                    }
+                )
+            }
+            targetScroll.addView(targetRow)
+            compassCard.addView(targetScroll)
+            compassCard.addView(spaceView(14f))
+        }
 
         compassCard.addView(TextView(this).apply {
             text = "Sélectionnez le coin où vous vous trouvez :"
@@ -1072,8 +1127,10 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 }
+                val inFrame = sp.frameId == engine.currentFrameId
+                val isActiveTarget = engine.navTargetSpot()?.id == sp.id
                 col.addView(TextView(this).apply {
-                    text = "#${idx + 1} ${sp.roomLabel}"
+                    text = "#${idx + 1} ${sp.roomLabel}${if (inFrame) "" else " • autre session"}"
                     setTextColor(textPrimaryCol)
                     textSize = 14.5f
                     setTypeface(typeface, Typeface.BOLD)
@@ -1084,6 +1141,34 @@ class MainActivity : Activity() {
                     setTextColor(textSecondaryCol)
                     textSize = 12f
                 })
+                if (!inFrame) {
+                    col.addView(TextView(this).apply {
+                        text = "Allez à ce point puis appuyez sur « Je suis ici » pour pouvoir y être guidé."
+                        setTextColor(textSecondaryCol)
+                        textSize = 11.5f
+                        setPadding(0, dp(4f), 0, 0)
+                    })
+                }
+                val actionRowSpot = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, dp(8f), 0, 0)
+                }
+                if (inFrame) {
+                    actionRowSpot.addView(
+                        buildMiniPill(if (isActiveTarget) "Cible active" else "Guider", isActiveTarget, "#10B981") {
+                            engine.setNavTarget(sp.id)
+                            rebuildAllTabs()
+                        }
+                    )
+                }
+                actionRowSpot.addView(
+                    buildMiniPill("Je suis ici", false, "#0284C7") {
+                        engine.recalibrateAtSpot(sp.id)
+                        Toast.makeText(this@MainActivity, "Position recalée sur « ${sp.roomLabel} »", Toast.LENGTH_SHORT).show()
+                        rebuildAllTabs()
+                    }
+                )
+                col.addView(actionRowSpot)
                 box.addView(col)
 
                 box.addView(TextView(this).apply {

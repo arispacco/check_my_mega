@@ -76,6 +76,17 @@ class NativeHardwareEngine(
     val radarSpots = CopyOnWriteArrayList<HouseRadarSpot>()
     val customRooms = CopyOnWriteArrayList<String>()
 
+    /** Recent walked positions (x, y in metres) drawn as breadcrumbs on the compass. */
+    val trail = CopyOnWriteArrayList<DoubleArray>()
+
+    /**
+     * Dead-reckoning coordinate frame of the current session. Spots saved in a previous session
+     * live in another frame and are only navigable after [recalibrateAtSpot] adopts their frame.
+     */
+    @Volatile var currentFrameId: Long = System.currentTimeMillis()
+    @Volatile var navTargetSpotId: String? = null
+    @Volatile private var navArrivedFlag = false
+
     @Volatile var activeSession: BundleAuditSession? = null
     @Volatile var selectedReportSession: BundleAuditSession? = null
     @Volatile var statusBanner: String = "Moteur 100% Kotlin Natif 120 Hz actif"
@@ -164,7 +175,8 @@ class NativeHardwareEngine(
                             altitudeZ = o.optDouble("altitudeZ", 0.0),
                             bandLabel = o.optString("bandLabel", "4G LTE"),
                             isPureRfMeasurement = o.optBoolean("isPureRfMeasurement", true),
-                            timestampMs = o.optLong("timestampMs", System.currentTimeMillis())
+                            timestampMs = o.optLong("timestampMs", System.currentTimeMillis()),
+                            frameId = o.optLong("frameId", 0L)
                         )
                     )
                 }
@@ -216,6 +228,7 @@ class NativeHardwareEngine(
                     put("bandLabel", s.bandLabel)
                     put("isPureRfMeasurement", s.isPureRfMeasurement)
                     put("timestampMs", s.timestampMs)
+                    put("frameId", s.frameId)
                 }
                 arr.put(o)
             }
@@ -385,6 +398,8 @@ class NativeHardwareEngine(
                     val rad = Math.toRadians(state.azimuthDeg)
                     state.posX += NAV_STRIDE_METERS * sin(rad)
                     state.posY += NAV_STRIDE_METERS * cos(rad)
+                    trail.add(doubleArrayOf(state.posX, state.posY))
+                    while (trail.size > TRAIL_MAX_POINTS) trail.removeAt(0)
                 }
             }
 
@@ -797,7 +812,8 @@ class NativeHardwareEngine(
             altitudeZ = state.relativeAltitudeMeters,
             bandLabel = state.bandLabel,
             isPureRfMeasurement = true,
-            timestampMs = System.currentTimeMillis()
+            timestampMs = System.currentTimeMillis(),
+            frameId = currentFrameId
         )
         radarSpots.add(0, spot)
         saveRadarSpotsToDisk()
@@ -943,7 +959,8 @@ class NativeHardwareEngine(
                     altitudeZ = state.relativeAltitudeMeters,
                     bandLabel = state.bandLabel,
                     isPureRfMeasurement = usedPureRfFallback,
-                    timestampMs = System.currentTimeMillis()
+                    timestampMs = System.currentTimeMillis(),
+                    frameId = currentFrameId
                 )
                 radarSpots.add(0, spot)
                 saveRadarSpotsToDisk()
@@ -963,6 +980,10 @@ class NativeHardwareEngine(
         state.stepCount = 0
         state.posX = 0.0
         state.posY = 0.0
+        trail.clear()
+        currentFrameId = System.currentTimeMillis()
+        navTargetSpotId = null
+        navArrivedFlag = false
         baselinePressureHpa = state.pressureHpa
         state.relativeAltitudeMeters = 0.0
         gpsOriginLat = state.gpsLat
@@ -976,21 +997,59 @@ class NativeHardwareEngine(
         return radarSpots.maxByOrNull { it.compositeScore }
     }
 
-    fun bearingToBestSpotDeg(): Double? {
-        val best = bestSpot() ?: return null
-        val dx = best.posX - state.posX
-        val dy = best.posY - state.posY
-        if (dx * dx + dy * dy < 0.20) {
-            return best.azimuthDeg
-        }
-        return (Math.toDegrees(atan2(dx, dy)) + 360.0) % 360.0
+    /** Spots recorded in the current dead-reckoning frame, i.e. the ones the compass can guide to. */
+    fun navigableSpots(): List<HouseRadarSpot> = radarSpots.filter { it.frameId == currentFrameId }
+
+    /** The spot the compass guides to: the user's choice, else the best-scoring navigable spot. */
+    fun navTargetSpot(): HouseRadarSpot? {
+        val candidates = navigableSpots()
+        if (candidates.isEmpty()) return null
+        return candidates.firstOrNull { it.id == navTargetSpotId }
+            ?: candidates.maxByOrNull { it.compositeScore }
     }
 
-    fun distanceToBestSpotMeters(): Double {
-        val best = bestSpot() ?: return 0.0
-        val dx = best.posX - state.posX
-        val dy = best.posY - state.posY
-        return sqrt(dx * dx + dy * dy)
+    fun setNavTarget(spotId: String?) {
+        navTargetSpotId = spotId
+        navArrivedFlag = false
+        notifyUi()
+    }
+
+    /** Live guidance (distance, bearing, turn angle, arrival) toward [navTargetSpot], or null. */
+    fun navSnapshot(): NavSnapshot? {
+        val spot = navTargetSpot() ?: return null
+        val dx = spot.posX - state.posX
+        val dy = spot.posY - state.posY
+        val dist = sqrt(dx * dx + dy * dy)
+        navArrivedFlag = if (navArrivedFlag) dist <= NAV_LEAVE_RADIUS_M else dist <= NAV_ARRIVAL_RADIUS_M
+        val bearing = if (dist > 0.05) {
+            (Math.toDegrees(atan2(dx, dy)) + 360.0) % 360.0
+        } else {
+            spot.azimuthDeg
+        }
+        val rel = ((bearing - state.azimuthDeg + 540.0) % 360.0) - 180.0
+        return NavSnapshot(spot, dist, bearing, rel, navArrivedFlag)
+    }
+
+    /**
+     * Drift correction: the user stands on a saved spot and says so. The dead-reckoned position
+     * snaps to that spot and the session adopts its coordinate frame, which is also how spots
+     * saved in a previous session become navigable again.
+     */
+    fun recalibrateAtSpot(spotId: String) {
+        val spot = radarSpots.firstOrNull { it.id == spotId } ?: return
+        currentFrameId = spot.frameId
+        state.posX = spot.posX
+        state.posY = spot.posY
+        if (state.hasGpsFix) {
+            // Keep the GPS blend consistent with the snapped position.
+            val earthR = 6378137.0
+            gpsOriginLat = state.gpsLat - Math.toDegrees(spot.posY / earthR)
+            gpsOriginLon = state.gpsLon - Math.toDegrees(spot.posX / (earthR * cos(Math.toRadians(gpsOriginLat))))
+        }
+        trail.clear()
+        navArrivedFlag = false
+        statusBanner = "Position recalée sur « ${spot.roomLabel} »"
+        notifyUi()
     }
 
     // =========================================================================
