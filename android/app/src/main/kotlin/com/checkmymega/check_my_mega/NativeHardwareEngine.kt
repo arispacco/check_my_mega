@@ -97,9 +97,8 @@ class NativeHardwareEngine(
     private var hasAccel = false
     private var hasMagnet = false
     private var baselinePressureHpa: Float = 0f
-    private var lastLinearAccelNs: Long = 0L
-    private var velX: Double = 0.0
-    private var velY: Double = 0.0
+    private var hasLinearAccel = false
+    private var lastMotionNs: Long = 0L
     private var gpsOriginLat: Double = 0.0
     private var gpsOriginLon: Double = 0.0
 
@@ -318,6 +317,8 @@ class NativeHardwareEngine(
                     sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST)
                 }
                 sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let {
+                    hasLinearAccel = true
+                    lastMotionNs = SystemClock.elapsedRealtimeNanos()
                     sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
                 }
                 sm.getDefaultSensor(Sensor.TYPE_PRESSURE)?.let {
@@ -376,35 +377,26 @@ class NativeHardwareEngine(
             }
 
             Sensor.TYPE_STEP_DETECTOR -> {
-                state.stepCount += 1
-                val rad = Math.toRadians(state.azimuthDeg)
-                val strideMeters = 0.72
-                state.posX += strideMeters * sin(rad)
-                state.posY += strideMeters * cos(rad)
+                // ZUPT gate: a step reported while the phone shows no motion at all is a false
+                // positive (table vibration, hand tremor), so the position must not move.
+                val stationary = hasLinearAccel && (event.timestamp - lastMotionNs) > STATIONARY_GATE_NS
+                if (!stationary) {
+                    state.stepCount += 1
+                    val rad = Math.toRadians(state.azimuthDeg)
+                    state.posX += NAV_STRIDE_METERS * sin(rad)
+                    state.posY += NAV_STRIDE_METERS * cos(rad)
+                }
             }
 
             Sensor.TYPE_LINEAR_ACCELERATION -> {
-                // ZUPT (Zero-Velocity Update) prevents dead-reckoning drift when stationary
-                val nowNs = event.timestamp
-                if (lastLinearAccelNs != 0L) {
-                    val dt = ((nowNs - lastLinearAccelNs) * 1e-9).coerceIn(0.001, 0.08)
-                    val ax = event.values[0].toDouble()
-                    val ay = event.values[1].toDouble()
-                    val mag = sqrt(ax * ax + ay * ay)
-                    if (mag in 0.45..4.5) {
-                        val rad = Math.toRadians(state.azimuthDeg)
-                        val forwardAccel = ay * 0.12
-                        velX = (velX + forwardAccel * sin(rad) * dt) * 0.75
-                        velY = (velY + forwardAccel * cos(rad) * dt) * 0.75
-                        state.posX += velX * dt
-                        state.posY += velY * dt
-                    } else {
-                        // Strict ZUPT clamp when hand is still
-                        velX = 0.0
-                        velY = 0.0
-                    }
+                // Only used as a motion detector. Double-integrating this sensor drifts by metres
+                // within seconds, and the step detector already feeds the position (no double count).
+                val ax = event.values[0].toDouble()
+                val ay = event.values[1].toDouble()
+                val az = event.values[2].toDouble()
+                if (sqrt(ax * ax + ay * ay + az * az) > MOTION_THRESHOLD_MS2) {
+                    lastMotionNs = event.timestamp
                 }
-                lastLinearAccelNs = nowNs
             }
 
             Sensor.TYPE_PRESSURE -> {

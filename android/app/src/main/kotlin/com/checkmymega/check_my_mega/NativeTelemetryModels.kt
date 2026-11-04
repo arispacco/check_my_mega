@@ -193,6 +193,15 @@ data class HouseRadarSpot(
         }
 }
 
+/** Average walking stride used by the step-based dead reckoning. */
+const val NAV_STRIDE_METERS = 0.72
+
+/** Linear-acceleration magnitude (m/s²) above which the phone is considered moving. */
+const val MOTION_THRESHOLD_MS2 = 0.4
+
+/** A step reported more than this long after the last motion is rejected as a false positive. */
+const val STATIONARY_GATE_NS = 1_000_000_000L
+
 class LiveRadioAndSensorState {
     @Volatile var hasSimCard: Boolean = true
     @Volatile var operatorName: String = "Détection SIM..."
