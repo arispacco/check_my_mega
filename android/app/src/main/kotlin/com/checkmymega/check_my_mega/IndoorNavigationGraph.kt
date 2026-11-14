@@ -568,11 +568,19 @@ class IndoorNavigationGraph {
     }
 
     private fun selectStartNodeLocked(curX: Double, curY: Double): GraphNode? {
-        val cur = currentNodeId?.let { nodes[it] }
-        if (cur != null && hypot(curX - cur.x, curY - cur.y) <= 2.0) {
+        val nearest = findNearestNodeLocked(curX, curY)
+        val cur = currentNodeId?.let { nodes[it] } ?: return nearest
+        val distCur = hypot(curX - cur.x, curY - cur.y)
+        if (nearest != null && nearest.id != cur.id) {
+            val distNearest = hypot(curX - nearest.x, curY - nearest.y)
+            if (distNearest + 0.20 < distCur) {
+                return nearest
+            }
+        }
+        if (distCur <= 2.0) {
             return cur
         }
-        return findNearestNodeLocked(curX, curY)
+        return nearest
     }
 
     private fun evaluateDeviationLocked(curX: Double, curY: Double, nowMs: Long) {
@@ -791,8 +799,8 @@ class IndoorNavigationGraph {
         const val NODE_STEP_SPACING_M = 1.50
         const val MIN_CORNER_DIST_M = 0.85
         const val CORNER_TURN_DEG = 32.0
-        const val LOOP_CLOSURE_RADIUS_M = 1.05
-        const val SPOT_REUSE_RADIUS_M = 0.75
+        const val LOOP_CLOSURE_RADIUS_M = 0.68
+        const val SPOT_REUSE_RADIUS_M = 0.60
         const val MAX_EDGE_CONNECT_M = 4.50
         const val MAX_SINGLE_STEP_JUMP_M = 5.50
         const val WAYPOINT_PASS_RADIUS_M = 1.15
