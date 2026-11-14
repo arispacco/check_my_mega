@@ -56,6 +56,8 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -367,27 +369,11 @@ class NativeHardwareEngine(
 
                 val rawOrient = FloatArray(3)
                 SensorManager.getOrientation(rotMatrix, rawOrient)
-                val pitchDeg = Math.toDegrees(rawOrient[1].toDouble())
-                val rollDeg = Math.toDegrees(rawOrient[2].toDouble())
-                state.pitchDeg = pitchDeg
-                state.rollDeg = rollDeg
+                state.pitchDeg = Math.toDegrees(rawOrient[1].toDouble())
+                state.rollDeg = Math.toDegrees(rawOrient[2].toDouble())
 
-                val finalOrient = FloatArray(3)
-                if (abs(pitchDeg) > 38.0) {
-                    val remapped = FloatArray(9)
-                    SensorManager.remapCoordinateSystem(
-                        rotMatrix,
-                        SensorManager.AXIS_X,
-                        SensorManager.AXIS_Z,
-                        remapped
-                    )
-                    SensorManager.getOrientation(remapped, finalOrient)
-                } else {
-                    System.arraycopy(rawOrient, 0, finalOrient, 0, 3)
-                }
-
-                val targetDeg = (Math.toDegrees(finalOrient[0].toDouble()) + 360.0) % 360.0
-                state.azimuthDeg = smoothAngle(state.azimuthDeg, targetDeg, 0.32)
+                val targetDeg = extractContinuousAzimuthDeg(rotMatrix)
+                state.azimuthDeg = smoothAngle(state.azimuthDeg, targetDeg, 0.45)
             }
 
             Sensor.TYPE_ACCELEROMETER -> {
@@ -452,11 +438,37 @@ class NativeHardwareEngine(
         val r = FloatArray(9)
         val i = FloatArray(9)
         if (SensorManager.getRotationMatrix(r, i, accelValues, magnetValues)) {
-            val orient = FloatArray(3)
-            SensorManager.getOrientation(r, orient)
-            val deg = (Math.toDegrees(orient[0].toDouble()) + 360.0) % 360.0
-            state.azimuthDeg = smoothAngle(state.azimuthDeg, deg, 0.28)
+            val deg = extractContinuousAzimuthDeg(r)
+            state.azimuthDeg = smoothAngle(state.azimuthDeg, deg, 0.38)
         }
+    }
+
+    /**
+     * Computes horizontal azimuth (0..360 deg) directly from the 3D rotation matrix without
+     * Euler gimbal lock or a discontinuous pitch threshold when tilting between portrait and landscape.
+     */
+    private fun extractContinuousAzimuthDeg(rotMatrix: FloatArray): Double {
+        val yE = rotMatrix[1].toDouble()
+        val yN = rotMatrix[4].toDouble()
+        val lenY = hypot(yE, yN)
+
+        // Blend smoothly toward the camera-normal horizontal vector only near plumb vertical.
+        val sign = if (rotMatrix[7] >= 0f) -1.0 else 1.0
+        val zE = sign * rotMatrix[2].toDouble()
+        val zN = sign * rotMatrix[5].toDouble()
+        val lenZ = hypot(zE, zN)
+
+        val u = ((0.35 - lenY) / 0.25).coerceIn(0.0, 1.0)
+        val wVert = u * u * (3.0 - 2.0 * u)
+
+        val uyE = if (lenY > 1e-4) yE / lenY else 0.0
+        val uyN = if (lenY > 1e-4) yN / lenY else 0.0
+        val uzE = if (lenZ > 1e-4) zE / lenZ else uyE
+        val uzN = if (lenZ > 1e-4) zN / lenZ else uyN
+
+        val east = (1.0 - wVert) * uyE + wVert * uzE
+        val north = (1.0 - wVert) * uyN + wVert * uzN
+        return (Math.toDegrees(atan2(east, north)) + 360.0) % 360.0
     }
 
     private fun smoothAngle(current: Double, target: Double, alpha: Double): Double {

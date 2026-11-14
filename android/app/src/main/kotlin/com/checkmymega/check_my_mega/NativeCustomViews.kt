@@ -619,7 +619,7 @@ class WayfinderCompassRadarView(
         if (!isAttached) return
         val st = engine.state
 
-        displayedAzimuthDeg = (displayedAzimuthDeg + wrap180(st.azimuthDeg - displayedAzimuthDeg) * 0.35 + 360.0) % 360.0
+        displayedAzimuthDeg = (displayedAzimuthDeg + wrap180(st.azimuthDeg - displayedAzimuthDeg) * 0.42 + 360.0) % 360.0
 
         frameSpots = engine.navigableSpots()
         val s = engine.navSnapshot()
