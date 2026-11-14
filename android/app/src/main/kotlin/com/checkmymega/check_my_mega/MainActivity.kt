@@ -64,11 +64,13 @@ class MainActivity : Activity() {
 
     // Live fast-updated views
     private var compassRadarView: WayfinderCompassRadarView? = null
+    private var miniMapView: VideoGameMiniMapView? = null
     private var radialGaugeView: RadialVeracityGaugeView? = null
     private var liveHudCarrierTv: TextView? = null
     private var liveHudBandTv: TextView? = null
     private var liveHudDistTv: TextView? = null
     private var liveGuidanceBannerTv: TextView? = null
+    private var liveRouteBlockedBtn: LinearLayout? = null
     private var liveBentoRsrpValTv: TextView? = null
     private var liveBentoRsrpSubTv: TextView? = null
     private var liveBentoSinrValTv: TextView? = null
@@ -526,6 +528,7 @@ class MainActivity : Activity() {
 
         radialGaugeView?.invalidate()
         compassRadarView?.invalidate()
+        miniMapView?.invalidate()
 
         liveHudCarrierTv?.text = "SIM : ${st.operatorName}"
         liveHudBandTv?.text = st.bandLabel
@@ -548,7 +551,9 @@ class MainActivity : Activity() {
         liveBentoLocValTv?.text = "Hauteur Z : ${String.format("%+.1f", st.relativeAltitudeMeters)}m"
         liveBentoLocSubTv?.text = "${st.stepCount} pas • ${st.pressureHpa.roundToInt()} hPa"
 
+        val curNav = engine.navSnapshot()
         liveGuidanceBannerTv?.text = guidanceText()
+        liveRouteBlockedBtn?.visibility = if (curNav != null && !curNav.arrived) View.VISIBLE else View.GONE
 
         val now = System.currentTimeMillis()
         val needsInitialSessionRender = (engine.activeSession != null && radialGaugeView == null)
@@ -560,26 +565,39 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Plain-language instruction that mirrors what the compass arrow shows. */
+    /** Plain-language instruction that mirrors what the compass arrow and A* mini-map show. */
     private fun guidanceText(): String {
         val snap = engine.navSnapshot()
         if (snap == null) {
             return if (engine.radarSpots.isEmpty()) {
-                "Choisissez un coin ci-dessous puis appuyez sur « Capturer ». La flèche vous y ramènera ensuite."
+                "Choisissez un coin ci-dessous puis appuyez sur « Capturer ». La carte et la flèche vous y ramèneront."
             } else {
-                "Ces points datent d'une autre session. Placez-vous sur l'un d'eux et appuyez sur « Je suis ici » pour recaler la boussole."
+                "Ces points datent d'une autre session. Placez-vous sur l'un d'eux et appuyez sur « Je suis ici » pour recaler la carte."
             }
         }
         val spot = snap.spot
         val meta = "${spot.rsrpDbm} dBm • ~${String.format("%.1f", spot.speedMbps)} Mbps"
         val dist = String.format("%.1f", snap.distanceM)
         val rel = snap.relTurnDeg
+        if (snap.arrived) {
+            return "Vous êtes arrivé à « ${spot.roomLabel} » ($meta). Posez votre téléphone ici."
+        }
+        val prefix = when {
+            snap.justRerouted -> "Détour détecté • Nouvelle route : "
+            snap.isDirectFallback -> "Hors couloir : "
+            snap.routeSteps.size > 2 -> "Via couloir (${snap.routeSteps.size - 1} tronçons) • "
+            else -> ""
+        }
+        val turnHint = if (snap.routeSteps.size > 2) {
+            " (virage dans ${String.format("%.1f", snap.nextTurnDistanceM)} m)"
+        } else {
+            ""
+        }
         return when {
-            snap.arrived -> "Vous êtes arrivé à « ${spot.roomLabel} » ($meta). Posez votre téléphone ici."
-            abs(rel) > 135.0 -> "Faites demi-tour — « ${spot.roomLabel} » est à $dist m derrière vous."
-            abs(rel) <= 12.0 -> "Tout droit : « ${spot.roomLabel} » à $dist m (≈ ${snap.approxSteps} pas) • $meta"
-            rel > 0 -> "Tournez à droite de ${abs(rel).roundToInt()}° — « ${spot.roomLabel} » à $dist m • $meta"
-            else -> "Tournez à gauche de ${abs(rel).roundToInt()}° — « ${spot.roomLabel} » à $dist m • $meta"
+            abs(rel) > 135.0 -> "${prefix}Faites demi-tour — « ${spot.roomLabel} » à $dist m$turnHint."
+            abs(rel) <= 12.0 -> "${prefix}Tout droit vers « ${spot.roomLabel} » : $dist m (≈ ${snap.approxSteps} pas)$turnHint • $meta"
+            rel > 0 -> "${prefix}Tournez à droite de ${abs(rel).roundToInt()}° — « ${spot.roomLabel} » à $dist m$turnHint"
+            else -> "${prefix}Tournez à gauche de ${abs(rel).roundToInt()}° — « ${spot.roomLabel} » à $dist m$turnHint"
         }
     }
 
@@ -1025,6 +1043,7 @@ class MainActivity : Activity() {
         liveHudCarrierTv = null
         liveHudBandTv = null
         liveHudDistTv = null
+        liveRouteBlockedBtn = null
         liveBentoRsrpValTv = null
         liveBentoRsrpSubTv = null
         liveBentoSinrValTv = null
@@ -1074,6 +1093,13 @@ class MainActivity : Activity() {
         }
         (cView.parent as? ViewGroup)?.removeView(cView)
         compassCard.addView(cView)
+        compassCard.addView(spaceView(8f))
+
+        val mView = miniMapView ?: VideoGameMiniMapView(this, engine).also {
+            miniMapView = it
+        }
+        (mView.parent as? ViewGroup)?.removeView(mView)
+        compassCard.addView(mView)
         compassCard.addView(spaceView(10f))
 
         liveGuidanceBannerTv = TextView(this).apply {
@@ -1099,6 +1125,31 @@ class MainActivity : Activity() {
                 rebuildAllTabs()
             }
         )
+        val curNav = engine.navSnapshot()
+        val blockedBtn = buildIconActionButton(
+            VectorIconType.REFRESH,
+            "Route bloquée (signaler un obstacle)",
+            subtleBgHex,
+            "#F59E0B",
+            borderHex
+        ) {
+            val rerouted = engine.markCurrentRouteBlocked()
+            Toast.makeText(
+                this@MainActivity,
+                if (rerouted) "Obstacle signalé : recalcul du plus court chemin..."
+                else "Contournez l'obstacle pour tracer un passage alternatif.",
+                Toast.LENGTH_SHORT
+            ).show()
+            rebuildAllTabs()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8f) }
+            visibility = if (curNav != null && !curNav.arrived) View.VISIBLE else View.GONE
+        }
+        liveRouteBlockedBtn = blockedBtn
+        compassCard.addView(blockedBtn)
         compassCard.addView(spaceView(10f))
         compassCard.addView(
             buildMoreInfoToggleButton(showCompassMoreInfo) {
@@ -1366,6 +1417,16 @@ class MainActivity : Activity() {
                 spotsCard.addView(box)
             }
             spotsCard.addView(spaceView(6f))
+            if (engine.navGraph.hasBlockedEdges()) {
+                spotsCard.addView(
+                    buildIconActionButton(VectorIconType.REFRESH, "Effacer les obstacles de la carte", subtleBgHex, "#F59E0B", borderHex) {
+                        engine.clearRouteObstacles()
+                        Toast.makeText(this@MainActivity, "Obstacles effacés : tous les couloirs sont réouverts.", Toast.LENGTH_SHORT).show()
+                        rebuildAllTabs()
+                    }
+                )
+                spotsCard.addView(spaceView(8f))
+            }
             spotsCard.addView(
                 buildIconActionButton(VectorIconType.TRASH, "Effacer les coins enregistrés", subtleBgHex, "#EF4444", borderHex) {
                     engine.clearRadarSpots()
