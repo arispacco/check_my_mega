@@ -25,8 +25,8 @@ android {
         applicationId = "com.checkmymega.check_my_mega"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.1.0-native-120hz"
+        versionCode = 4
+        versionName = "2.2.0-native-120hz"
     }
 
     signingConfigs {
