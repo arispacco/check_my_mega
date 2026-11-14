@@ -77,6 +77,8 @@ class MainActivity : Activity() {
     private var liveBentoLocSubTv: TextView? = null
 
     private var lastFullDomRefreshMs: Long = 0L
+    private var wasPausedInBackground: Boolean = false
+    private var lastManualPermRequestMs: Long = 0L
 
     // Theme Palette Helpers (Light Mode vs Dark Mode)
     private val isDark: Boolean get() = engine.settings.isDarkMode
@@ -108,6 +110,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        wasPausedInBackground = true
         engine.onPauseLifecycle()
         super.onPause()
     }
@@ -115,6 +118,35 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         engine.onResumeLifecycle()
+        if (wasPausedInBackground) {
+            wasPausedInBackground = false
+            engine.onPermissionsUpdated()
+            if (::rootLayout.isInitialized) {
+                rebuildAllTabs()
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        engine.onPermissionsUpdated()
+        if (::rootLayout.isInitialized) {
+            rebuildAllTabs()
+        }
+        if (requestCode == 4202) {
+            val missing = missingCriticalRuntimePermissions()
+            if (missing.isNotEmpty()) {
+                val elapsed = System.currentTimeMillis() - lastManualPermRequestMs
+                val canShowDialog = missing.any { shouldShowRequestPermissionRationale(it) }
+                if (elapsed < 450L || !canShowDialog) {
+                    openAppDetailsSettings(showRestrictedHint = true)
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -156,7 +188,7 @@ class MainActivity : Activity() {
         } catch (_: Exception) {}
     }
 
-    private fun requestAllPermissionsIfNeeded() {
+    private fun allRuntimePermissionsList(): List<String> {
         val perms = mutableListOf(
             Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -167,11 +199,77 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             perms.add(Manifest.permission.ACTIVITY_RECOGNITION)
         }
-        val missing = perms.filter {
+        return perms
+    }
+
+    private fun missingCriticalRuntimePermissions(): List<String> {
+        return allRuntimePermissionsList().filter {
             checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
+    }
+
+    private fun hasReadSmsPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasPhoneStatePermission(): Boolean =
+        checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasLocationPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasAnyMissingSetupPermission(): Boolean =
+        !engine.hasUsageStatsPermission() ||
+            !hasReadSmsPermission() ||
+            !hasPhoneStatePermission() ||
+            !hasLocationPermission()
+
+    private fun requestAllPermissionsIfNeeded(requestCode: Int = 4201) {
+        val missing = missingCriticalRuntimePermissions()
         if (missing.isNotEmpty()) {
-            requestPermissions(missing.toTypedArray(), 4201)
+            if (requestCode == 4202) {
+                lastManualPermRequestMs = System.currentTimeMillis()
+            }
+            requestPermissions(missing.toTypedArray(), requestCode)
+        }
+    }
+
+    private fun openUsageAccessSettingsSafe() {
+        val withPackage = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+            data = Uri.parse("package:$packageName")
+        }
+        try {
+            startActivity(withPackage)
+            Toast.makeText(
+                this,
+                "Si l'interrupteur est grisé, passez d'abord par « Infos appli > ⋮ > Autoriser les paramètres restreints ».",
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            } catch (_: Exception) {
+                openAppDetailsSettings(showRestrictedHint = true)
+            }
+        }
+    }
+
+    private fun openAppDetailsSettings(showRestrictedHint: Boolean = true) {
+        if (showRestrictedHint) {
+            Toast.makeText(
+                this,
+                "Appuyez sur ⋮ en haut à droite (ou en bas sur Xiaomi) > « Autoriser les paramètres restreints », puis activez SMS et Données d'utilisation.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            })
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS))
+            } catch (_: Exception) {}
         }
     }
 
@@ -556,25 +654,8 @@ class MainActivity : Activity() {
         container.addView(simCard)
         container.addView(spaceView(18f))
 
-        if (!engine.hasUsageStatsPermission()) {
-            val permCard = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
-                background = cardDrawable(if (isDark) "#2A1F0A" else "#FFFBEB", "#F59E0B", 18f, 1.2f)
-            }
-            permCard.addView(TextView(this).apply {
-                text = "Autorisation requise : Accès aux données d'utilisation"
-                setTextColor(Color.parseColor("#F59E0B"))
-                textSize = 14f
-                setTypeface(typeface, Typeface.BOLD)
-            })
-            permCard.addView(spaceView(8f))
-            permCard.addView(buildIconActionButton(VectorIconType.SHIELD_CHECK, "Autoriser dans Android", "#F59E0B", "#FFFFFF", "#F59E0B") {
-                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
-                    data = Uri.parse("package:$packageName")
-                })
-            })
-            container.addView(permCard)
+        if (hasAnyMissingSetupPermission()) {
+            container.addView(buildPermissionsDiagnosticCard(showAllGrantedNotice = false))
             container.addView(spaceView(18f))
         }
 
@@ -1702,6 +1783,135 @@ class MainActivity : Activity() {
             }
         }
         container.addView(simSelectCard)
+        container.addView(spaceView(20f))
+
+        // 4. Permissions & Android Restricted Settings Helper Card
+        container.addView(buildPermissionsDiagnosticCard(showAllGrantedNotice = true))
+    }
+
+    private fun buildPermissionsDiagnosticCard(showAllGrantedNotice: Boolean): LinearLayout {
+        val missingUsage = !engine.hasUsageStatsPermission()
+        val missingSms = !hasReadSmsPermission()
+        val missingPhone = !hasPhoneStatePermission()
+        val missingLoc = !hasLocationPermission()
+        val hasMissing = missingUsage || missingSms || missingPhone || missingLoc
+
+        val cardBg = if (hasMissing) (if (isDark) "#2A1F0A" else "#FFFBEB") else cardBgHex
+        val cardBorder = if (hasMissing) "#F59E0B" else borderHex
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18f), dp(16f), dp(18f), dp(16f))
+            background = cardDrawable(cardBg, cardBorder, 18f, 1.2f)
+        }
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val headColor = Color.parseColor(if (hasMissing) "#F59E0B" else "#10B981")
+        head.addView(VectorIconView(this, VectorIconType.SHIELD_CHECK, headColor, 22f))
+        head.addView(TextView(this).apply {
+            text = if (hasMissing) {
+                "Autorisations requises & Déblocage Android"
+            } else {
+                "Autorisations système actives"
+            }
+            setTextColor(headColor)
+            textSize = 15.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(10f), 0, 0, 0)
+        })
+        card.addView(head)
+        card.addView(spaceView(10f))
+
+        val checks = listOf(
+            "Données d'utilisation OS (Mo par app)" to !missingUsage,
+            "SMS opérateur (forfaits & alertes)" to !missingSms,
+            "État SIM & Réseau mobile" to !missingPhone,
+            "Localisation & Cellule 4G" to !missingLoc
+        )
+        for ((label, ok) in checks) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(3f), 0, dp(3f))
+            }
+            row.addView(TextView(this).apply {
+                text = label
+                setTextColor(textPrimaryCol)
+                textSize = 12.5f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(TextView(this).apply {
+                text = if (ok) "Actif" else "Refusé / Requis"
+                setTextColor(Color.parseColor(if (ok) "#10B981" else "#EF4444"))
+                textSize = 11.5f
+                setTypeface(typeface, Typeface.BOLD)
+            })
+            card.addView(row)
+        }
+
+        if (hasMissing) {
+            card.addView(spaceView(10f))
+            card.addView(TextView(this).apply {
+                text = "Si Android 13–16 ou Xiaomi affiche « Paramètre restreint » ou refuse l'activation (normal sur une APK hors Play Store) :\n" +
+                    "1. Touchez « 1. Infos appli (Débloquer) » ci-dessous.\n" +
+                    "2. Menu ⋮ en haut à droite (ou en bas sur Xiaomi HyperOS/MIUI) > « Autoriser les paramètres restreints ».\n" +
+                    "3. Revenez activer Données d'utilisation et SMS."
+                setTextColor(textSecondaryCol)
+                textSize = 12f
+            })
+            card.addView(spaceView(12f))
+            card.addView(
+                buildIconActionButton(
+                    VectorIconType.SETTINGS,
+                    "1. Infos appli (Débloquer Paramètres restreints)",
+                    if (isDark) "#1E293B" else "#FFFFFF",
+                    if (isDark) "#F8FAFC" else "#0F172A",
+                    "#F59E0B"
+                ) {
+                    openAppDetailsSettings(showRestrictedHint = true)
+                }
+            )
+            if (missingUsage) {
+                card.addView(spaceView(8f))
+                card.addView(
+                    buildIconActionButton(
+                        VectorIconType.SHIELD_CHECK,
+                        "2. Activer Données d'utilisation",
+                        "#F59E0B",
+                        "#FFFFFF",
+                        "#F59E0B"
+                    ) {
+                        openUsageAccessSettingsSafe()
+                    }
+                )
+            }
+            if (missingCriticalRuntimePermissions().isNotEmpty()) {
+                card.addView(spaceView(8f))
+                card.addView(
+                    buildIconActionButton(
+                        VectorIconType.SIM_CARD,
+                        "Autoriser SMS / SIM / GPS",
+                        "#0284C7",
+                        "#FFFFFF",
+                        "#0284C7"
+                    ) {
+                        requestAllPermissionsIfNeeded(requestCode = 4202)
+                    }
+                )
+            }
+        } else if (showAllGrantedNotice) {
+            card.addView(spaceView(8f))
+            card.addView(TextView(this).apply {
+                text = "Toutes les sondes matérielles (NetworkStats, SMS, SIM, RF 4G) ont l'accès complet."
+                setTextColor(textSecondaryCol)
+                textSize = 12f
+            })
+        }
+
+        return card
     }
 
     private fun buildLiveBentoTile(

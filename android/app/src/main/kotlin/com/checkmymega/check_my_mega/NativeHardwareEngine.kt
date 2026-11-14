@@ -287,6 +287,23 @@ class NativeHardwareEngine(
         }
     }
 
+    /**
+     * Re-binds all hardware/SMS/NetworkStats listeners immediately after the user returns
+     * from Android system settings or grants runtime permissions.
+     */
+    fun onPermissionsUpdated() {
+        refreshAvailableSimSlots()
+        setupSensors()
+        setupLocation()
+        setupRealtimeTelephony()
+        registerSmsReceiver()
+        bgExecutor.execute {
+            forceModemCellInfoRefresh()
+            syncSmsAndBuildSessions()
+            refreshActiveSessionCounters()
+        }
+    }
+
     fun stop() {
         onPauseLifecycle()
         try {
