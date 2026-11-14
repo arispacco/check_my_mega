@@ -120,6 +120,15 @@ class NativeHardwareEngine(
     private var lastSpeedRxBytes: Long = 0L
     private var lastSpeedTxBytes: Long = 0L
 
+    // Live TrafficStats session anchor & optional manual bundle tracking
+    @Volatile var manualPromisedMb: Double = 0.0
+    @Volatile var manualPriceAmount: Int = 0
+    @Volatile var manualStartMs: Long = 0L
+    private var anchorStartMs: Long = 0L
+    private var anchorRxBytes: Long = -1L
+    private var anchorTxBytes: Long = -1L
+    private var anchorBootEpochMs: Long = 0L
+
     init {
         loadPersistedState()
     }
@@ -137,6 +146,14 @@ class NativeHardwareEngine(
         settings.aiApiKey = prefs.getString("aiApiKey", "") ?: ""
         settings.ollamaBaseUrl = prefs.getString("ollamaBaseUrl", "http://127.0.0.1:11434") ?: "http://127.0.0.1:11434"
         state.lastGemmaReport = prefs.getString("lastGemmaReport", "") ?: ""
+
+        manualPromisedMb = prefs.getFloat("manualPromisedMb", 0f).toDouble()
+        manualPriceAmount = prefs.getInt("manualPriceAmount", 0)
+        manualStartMs = prefs.getLong("manualStartMs", 0L)
+        anchorStartMs = prefs.getLong("anchorStartMs", 0L)
+        anchorRxBytes = prefs.getLong("anchorRxBytes", -1L)
+        anchorTxBytes = prefs.getLong("anchorTxBytes", -1L)
+        anchorBootEpochMs = prefs.getLong("anchorBootEpochMs", 0L)
 
         val defaultRooms = listOf("Salon", "Près Fenêtre", "Chambre", "Balcon / Véranda", "Bureau", "Cuisine")
         val roomsJson = prefs.getString("customRoomsJson", null)
@@ -1103,6 +1120,57 @@ class NativeHardwareEngine(
         } catch (_: Exception) {}
     }
 
+    private fun saveLiveTrafficAnchor(sessionStartMs: Long) {
+        val nowMs = System.currentTimeMillis()
+        val rx = TrafficStats.getMobileRxBytes().coerceAtLeast(0L)
+        val tx = TrafficStats.getMobileTxBytes().coerceAtLeast(0L)
+        val bootEpoch = nowMs - SystemClock.elapsedRealtime()
+        anchorStartMs = sessionStartMs
+        anchorRxBytes = rx
+        anchorTxBytes = tx
+        anchorBootEpochMs = bootEpoch
+        prefs.edit()
+            .putLong("anchorStartMs", sessionStartMs)
+            .putLong("anchorRxBytes", rx)
+            .putLong("anchorTxBytes", tx)
+            .putLong("anchorBootEpochMs", bootEpoch)
+            .apply()
+    }
+
+    fun setManualBundle(promisedMb: Double, priceAmount: Int = 0) {
+        val nowMs = System.currentTimeMillis()
+        manualPromisedMb = promisedMb.coerceAtLeast(0.0)
+        manualPriceAmount = priceAmount.coerceAtLeast(0)
+        manualStartMs = nowMs
+        prefs.edit()
+            .putFloat("manualPromisedMb", manualPromisedMb.toFloat())
+            .putInt("manualPriceAmount", manualPriceAmount)
+            .putLong("manualStartMs", manualStartMs)
+            .apply()
+        saveLiveTrafficAnchor(nowMs)
+        bgExecutor.execute { syncSmsAndBuildSessions() }
+    }
+
+    fun clearManualBundle() {
+        manualPromisedMb = 0.0
+        manualPriceAmount = 0
+        manualStartMs = 0L
+        anchorStartMs = 0L
+        anchorRxBytes = -1L
+        anchorTxBytes = -1L
+        anchorBootEpochMs = 0L
+        prefs.edit()
+            .remove("manualPromisedMb")
+            .remove("manualPriceAmount")
+            .remove("manualStartMs")
+            .remove("anchorStartMs")
+            .remove("anchorRxBytes")
+            .remove("anchorTxBytes")
+            .remove("anchorBootEpochMs")
+            .apply()
+        bgExecutor.execute { syncSmsAndBuildSessions() }
+    }
+
     fun syncSmsAndBuildSessions() {
         val parsedSms = readOperatorSmsFromInbox(80)
         smsRecords.clear()
@@ -1116,69 +1184,171 @@ class NativeHardwareEngine(
         val recentExhaustions = parsedSms.filter { it.isExhaustion && it.dateMs >= window24hStart }
             .sortedBy { it.dateMs }
 
+        val lastExhaustMs = recentExhaustions.lastOrNull()?.dateMs ?: 0L
+        val unexhaustedActivations = if (lastExhaustMs > 0L) {
+            recentActivations.filter { it.dateMs > lastExhaustMs }
+        } else {
+            recentActivations
+        }
+
+        val hasNewerSmsThanManual = unexhaustedActivations.any { it.dateMs > manualStartMs }
+        val useManual = manualPromisedMb > 0.0 && manualStartMs > 0L && !hasNewerSmsThanManual
+
         val builtSessions = mutableListOf<BundleAuditSession>()
         val activeIsp = IspBrand.fromText("${state.simOperatorCode} ${state.operatorName}")
+        val timeFmt = SimpleDateFormat("HH:mm", Locale.FRANCE)
 
-        if (recentActivations.isNotEmpty()) {
-            val firstStart = recentActivations.first().dateMs
-            val totalPromisedMb = recentActivations.sumOf { it.promisedMb }
-            val totalPrice = recentActivations.sumOf { it.priceAmount }
-            val isp = recentActivations.last().isp
-            val currency = recentActivations.last().currencyLabel
-
-            val (rx, tx) = queryDeviceBytes(firstStart, nowMs)
-            val apps = queryPerAppUsage(firstStart, nowMs)
-            val count = recentActivations.size
-            val planTitle = if (count > 1) {
-                "Cumul $count Forfaits SMS (${totalPromisedMb.roundToInt()} Mo)"
-            } else {
-                recentActivations.first().planName
+        when {
+            useManual -> {
+                val (rx, tx, apps, hasPreBucket, usedLiveAnchor) =
+                    measureSessionUsage(manualStartMs, nowMs, allowLiveAnchor = true, allowAppQuery = true)
+                val anchorNote = when {
+                    usedLiveAnchor -> "Suivi exact à 0 Mo depuis ${timeFmt.format(manualStartMs)}"
+                    hasPreBucket -> "Depuis ${timeFmt.format(manualStartMs)} (inclut tranche OS 2h)"
+                    else -> "Forfait manuel depuis ${timeFmt.format(manualStartMs)}"
+                }
+                builtSessions.add(
+                    BundleAuditSession(
+                        id = "MANUAL-$manualStartMs",
+                        isp = activeIsp,
+                        carrierDisplayName = state.operatorName,
+                        planName = "Forfait Manuel (${manualPromisedMb.roundToInt()} Mo)",
+                        promisedMb = manualPromisedMb,
+                        priceAmount = manualPriceAmount,
+                        currencyLabel = state.currencyLabel,
+                        validityHours = 24,
+                        startTimeMs = manualStartMs,
+                        endTimeMs = nowMs,
+                        rxBytes = rx,
+                        txBytes = tx,
+                        isExhausted = false,
+                        workloadTag = anchorNote,
+                        appUsages = apps,
+                        isNeutralMonitor = false,
+                        includesPreActivationBucket = hasPreBucket && !usedLiveAnchor,
+                        isManualAnchor = true
+                    )
+                )
             }
 
-            builtSessions.add(
-                BundleAuditSession(
-                    id = "SMS-CUMUL-$firstStart",
-                    isp = isp,
-                    carrierDisplayName = state.operatorName,
-                    planName = planTitle,
-                    promisedMb = totalPromisedMb,
-                    priceAmount = totalPrice,
-                    currencyLabel = currency,
-                    validityHours = 24,
-                    startTimeMs = firstStart,
-                    endTimeMs = nowMs,
-                    rxBytes = rx,
-                    txBytes = tx,
-                    isExhausted = false,
-                    workloadTag = "Détecté par SMS ($count activation(s) sur 24h)",
-                    appUsages = apps,
-                    isNeutralMonitor = false
+            unexhaustedActivations.isNotEmpty() -> {
+                val firstStart = unexhaustedActivations.first().dateMs
+                val totalPromisedMb = unexhaustedActivations.sumOf { it.promisedMb }
+                val totalPrice = unexhaustedActivations.sumOf { it.priceAmount }
+                val isp = unexhaustedActivations.last().isp
+                val currency = unexhaustedActivations.last().currencyLabel
+
+                // Capture an exact byte baseline if this SMS just arrived while the app runs.
+                if (nowMs - firstStart in 0L..120_000L && anchorStartMs != firstStart) {
+                    saveLiveTrafficAnchor(firstStart)
+                }
+
+                val (rx, tx, apps, hasPreBucket, usedLiveAnchor) =
+                    measureSessionUsage(firstStart, nowMs, allowLiveAnchor = true, allowAppQuery = true)
+                val count = unexhaustedActivations.size
+                val planTitle = if (count > 1) {
+                    "Cumul $count Forfaits SMS (${totalPromisedMb.roundToInt()} Mo)"
+                } else {
+                    unexhaustedActivations.first().planName
+                }
+                val startClock = timeFmt.format(firstStart)
+                val tag = when {
+                    usedLiveAnchor -> "Suivi exact dès $startClock ($count SMS actif)"
+                    hasPreBucket -> "Dès $startClock ($count SMS • tranche OS 2h)"
+                    !hasUsageStatsPermission() -> "Suivi dès ouverture (Données d'usage requises)"
+                    else -> "Détecté par SMS dès $startClock ($count actif)"
+                }
+
+                builtSessions.add(
+                    BundleAuditSession(
+                        id = "SMS-CUMUL-$firstStart",
+                        isp = isp,
+                        carrierDisplayName = state.operatorName,
+                        planName = planTitle,
+                        promisedMb = totalPromisedMb,
+                        priceAmount = totalPrice,
+                        currencyLabel = currency,
+                        validityHours = 24,
+                        startTimeMs = firstStart,
+                        endTimeMs = nowMs,
+                        rxBytes = rx,
+                        txBytes = tx,
+                        isExhausted = false,
+                        workloadTag = tag,
+                        appUsages = apps,
+                        isNeutralMonitor = false,
+                        includesPreActivationBucket = hasPreBucket && !usedLiveAnchor,
+                        isManualAnchor = false
+                    )
                 )
-            )
-        } else {
-            // Honest neutral 24h SIM monitor — does NOT invent a 1GB bundle when none is active!
-            val (rx, tx) = queryDeviceBytes(window24hStart, nowMs)
-            val apps = queryPerAppUsage(window24hStart, nowMs)
-            builtSessions.add(
-                BundleAuditSession(
-                    id = "NEUTRAL-24H",
-                    isp = activeIsp,
-                    carrierDisplayName = state.operatorName,
-                    planName = "Surveillance SIM Directe (24h)",
-                    promisedMb = 0.0,
-                    priceAmount = 0,
-                    currencyLabel = state.currencyLabel,
-                    validityHours = 24,
-                    startTimeMs = window24hStart,
-                    endTimeMs = nowMs,
-                    rxBytes = rx,
-                    txBytes = tx,
-                    isExhausted = false,
-                    workloadTag = "Aucun SMS d'activation récent • Compteur OS en direct",
-                    appUsages = apps,
-                    isNeutralMonitor = true
+            }
+
+            recentActivations.isNotEmpty() && lastExhaustMs > recentActivations.last().dateMs -> {
+                val prevExhaustMs = recentExhaustions.dropLast(1).lastOrNull()?.dateMs ?: 0L
+                val exhaustedChain = recentActivations.filter { it.dateMs > prevExhaustMs }
+                    .ifEmpty { listOf(recentActivations.last()) }
+                val firstStart = exhaustedChain.first().dateMs
+                val totalPromisedMb = exhaustedChain.sumOf { it.promisedMb }
+                val totalPrice = exhaustedChain.sumOf { it.priceAmount }
+                val isp = exhaustedChain.last().isp
+                val currency = exhaustedChain.last().currencyLabel
+                val (rx, tx, apps, hasPreBucket, _) =
+                    measureSessionUsage(firstStart, lastExhaustMs, allowLiveAnchor = false, allowAppQuery = true)
+
+                builtSessions.add(
+                    BundleAuditSession(
+                        id = "SMS-EXHAUST-$firstStart",
+                        isp = isp,
+                        carrierDisplayName = state.operatorName,
+                        planName = "${exhaustedChain.last().planName} (Épuisé)",
+                        promisedMb = totalPromisedMb,
+                        priceAmount = totalPrice,
+                        currencyLabel = currency,
+                        validityHours = 24,
+                        startTimeMs = firstStart,
+                        endTimeMs = lastExhaustMs,
+                        rxBytes = rx,
+                        txBytes = tx,
+                        isExhausted = true,
+                        workloadTag = "Clôturé par SMS à ${timeFmt.format(lastExhaustMs)}",
+                        appUsages = apps,
+                        isNeutralMonitor = false,
+                        includesPreActivationBucket = hasPreBucket,
+                        isManualAnchor = false
+                    )
                 )
-            )
+            }
+
+            else -> {
+                val (rx, tx, apps, hasPreBucket, usedLiveAnchor) =
+                    measureSessionUsage(window24hStart, nowMs, allowLiveAnchor = false, allowAppQuery = true)
+                builtSessions.add(
+                    BundleAuditSession(
+                        id = "NEUTRAL-24H",
+                        isp = activeIsp,
+                        carrierDisplayName = state.operatorName,
+                        planName = "Surveillance SIM Directe (24h)",
+                        promisedMb = 0.0,
+                        priceAmount = 0,
+                        currencyLabel = state.currencyLabel,
+                        validityHours = 24,
+                        startTimeMs = window24hStart,
+                        endTimeMs = nowMs,
+                        rxBytes = rx,
+                        txBytes = tx,
+                        isExhausted = false,
+                        workloadTag = if (!hasUsageStatsPermission() || usedLiveAnchor) {
+                            "Compteur OS depuis l'ouverture (Usage Access requis)"
+                        } else {
+                            "Aucun SMS d'activation récent • Compteur OS 24h"
+                        },
+                        appUsages = apps,
+                        isNeutralMonitor = true,
+                        includesPreActivationBucket = hasPreBucket,
+                        isManualAnchor = false
+                    )
+                )
+            }
         }
 
         userSessions.clear()
@@ -1192,14 +1362,16 @@ class NativeHardwareEngine(
         val current = activeSession ?: return
         if (current.isExhausted) return
         val nowMs = System.currentTimeMillis()
-        val (rx, tx) = queryDeviceBytes(current.startTimeMs, nowMs)
-        val apps = queryPerAppUsage(current.startTimeMs, nowMs)
+        val allowAnchor = !current.isNeutralMonitor
+        val (rx, tx, apps, hasPreBucket, usedLiveAnchor) =
+            measureSessionUsage(current.startTimeMs, nowMs, allowLiveAnchor = allowAnchor, allowAppQuery = true)
         val updated = current.copy(
             carrierDisplayName = state.operatorName,
             endTimeMs = nowMs,
             rxBytes = rx,
             txBytes = tx,
-            appUsages = apps
+            appUsages = apps,
+            includesPreActivationBucket = hasPreBucket && !usedLiveAnchor
         )
         activeSession = updated
         if (userSessions.isNotEmpty()) userSessions[0] = updated
@@ -1386,41 +1558,126 @@ Analyse ces mesures matérielles réelles issues du téléphone de l'utilisateur
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun queryDeviceBytes(startTimeMs: Long, endTimeMs: Long): Pair<Long, Long> {
+    private data class SessionUsageResult(
+        val rxBytes: Long,
+        val txBytes: Long,
+        val appUsages: List<AppUidUsage>,
+        val includesPreActivationBucket: Boolean,
+        val usedLiveAnchor: Boolean
+    )
+
+    private fun resolveActiveSubscriberIdOrNull(): String? {
+        return try {
+            @Suppress("DEPRECATION", "HardwareIds", "MissingPermission")
+            telephonyManager?.subscriberId?.takeIf { it.isNotBlank() }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun measureSessionUsage(
+        startTimeMs: Long,
+        endTimeMs: Long,
+        allowLiveAnchor: Boolean,
+        allowAppQuery: Boolean
+    ): SessionUsageResult {
+        val nowMs = System.currentTimeMillis()
+        val apps = if (allowAppQuery) queryPerAppUsage(startTimeMs, endTimeMs) else emptyList()
+
+        // Use exact kernel byte delta whenever a same-boot live anchor is set for this window.
+        if (allowLiveAnchor && anchorStartMs == startTimeMs && anchorRxBytes >= 0L && anchorTxBytes >= 0L) {
+            val curBootEpoch = nowMs - SystemClock.elapsedRealtime()
+            val curRx = TrafficStats.getMobileRxBytes().coerceAtLeast(0L)
+            val curTx = TrafficStats.getMobileTxBytes().coerceAtLeast(0L)
+            val sameBoot = abs(curBootEpoch - anchorBootEpochMs) < 15_000L
+            if (sameBoot && curRx >= anchorRxBytes && curTx >= anchorTxBytes) {
+                return SessionUsageResult(
+                    rxBytes = curRx - anchorRxBytes,
+                    txBytes = curTx - anchorTxBytes,
+                    appUsages = apps,
+                    includesPreActivationBucket = false,
+                    usedLiveAnchor = true
+                )
+            }
+        }
+
         if (hasUsageStatsPermission() && startTimeMs > 0L) {
+            val subId = resolveActiveSubscriberIdOrNull()
+            val (rx, tx, hasPre) = queryDeviceBytesWithBucketInfo(startTimeMs, endTimeMs, subId)
+            if (rx >= 0L && tx >= 0L) {
+                return SessionUsageResult(rx, tx, apps, hasPre, usedLiveAnchor = false)
+            }
+        }
+
+        // Without UsageStats permission, avoid returning un-anchored boot totals; start a clean session anchor at 0.
+        if (anchorStartMs != startTimeMs) {
+            saveLiveTrafficAnchor(startTimeMs)
+        }
+        val curRx = TrafficStats.getMobileRxBytes().coerceAtLeast(0L)
+        val curTx = TrafficStats.getMobileTxBytes().coerceAtLeast(0L)
+        val dRx = if (anchorRxBytes in 0L..curRx) curRx - anchorRxBytes else 0L
+        val dTx = if (anchorTxBytes in 0L..curTx) curTx - anchorTxBytes else 0L
+        return SessionUsageResult(dRx, dTx, apps, includesPreActivationBucket = false, usedLiveAnchor = true)
+    }
+
+    private fun queryDeviceBytesWithBucketInfo(
+        startTimeMs: Long,
+        endTimeMs: Long,
+        subId: String?
+    ): Triple<Long, Long, Boolean> {
+        val candidates = if (subId != null) listOf<String?>(subId, null) else listOf<String?>(null)
+        for (candidateSubId in candidates) {
             try {
                 val nsm = context.getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
                 @Suppress("DEPRECATION")
-                val bucket = nsm.querySummaryForDevice(ConnectivityManager.TYPE_MOBILE, null, startTimeMs, endTimeMs)
-                if (bucket != null && (bucket.rxBytes + bucket.txBytes) >= 0L) {
-                    return Pair(bucket.rxBytes, bucket.txBytes)
+                val deviceBucket = nsm.querySummaryForDevice(ConnectivityManager.TYPE_MOBILE, candidateSubId, startTimeMs, endTimeMs)
+                var hasPreBucket = false
+                try {
+                    @Suppress("DEPRECATION")
+                    val stats = nsm.querySummary(ConnectivityManager.TYPE_MOBILE, candidateSubId, startTimeMs, endTimeMs)
+                    val b = NetworkStats.Bucket()
+                    while (stats.hasNextBucket()) {
+                        stats.getNextBucket(b)
+                        if ((b.rxBytes + b.txBytes) > 0L && b.startTimeStamp < startTimeMs) {
+                            hasPreBucket = true
+                            break
+                        }
+                    }
+                    stats.close()
+                } catch (_: Exception) {}
+
+                if (deviceBucket != null && (deviceBucket.rxBytes + deviceBucket.txBytes) >= 0L) {
+                    return Triple(deviceBucket.rxBytes, deviceBucket.txBytes, hasPreBucket)
                 }
             } catch (_: Exception) {}
         }
-        val rx = TrafficStats.getMobileRxBytes().coerceAtLeast(0L)
-        val tx = TrafficStats.getMobileTxBytes().coerceAtLeast(0L)
-        return Pair(rx, tx)
+        return Triple(-1L, -1L, false)
     }
 
     private fun queryPerAppUsage(startTimeMs: Long, endTimeMs: Long): List<AppUidUsage> {
         if (!hasUsageStatsPermission() || startTimeMs <= 0L) return emptyList()
         val map = mutableMapOf<Int, LongArray>()
-        try {
-            val nsm = context.getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
-            @Suppress("DEPRECATION")
-            val stats = nsm.querySummary(ConnectivityManager.TYPE_MOBILE, null, startTimeMs, endTimeMs)
-            val bucket = NetworkStats.Bucket()
-            while (stats.hasNextBucket()) {
-                stats.getNextBucket(bucket)
-                val uid = bucket.uid
-                val tot = bucket.rxBytes + bucket.txBytes
-                if (tot <= 0L) continue
-                val arr = map.getOrPut(uid) { LongArray(2) }
-                arr[0] += bucket.rxBytes
-                arr[1] += bucket.txBytes
-            }
-            stats.close()
-        } catch (_: Exception) {}
+        val subId = resolveActiveSubscriberIdOrNull()
+        val candidates = if (subId != null) listOf<String?>(subId, null) else listOf<String?>(null)
+        for (candidateSubId in candidates) {
+            try {
+                val nsm = context.getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager
+                @Suppress("DEPRECATION")
+                val stats = nsm.querySummary(ConnectivityManager.TYPE_MOBILE, candidateSubId, startTimeMs, endTimeMs)
+                val bucket = NetworkStats.Bucket()
+                while (stats.hasNextBucket()) {
+                    stats.getNextBucket(bucket)
+                    val uid = bucket.uid
+                    val tot = bucket.rxBytes + bucket.txBytes
+                    if (tot <= 0L) continue
+                    val arr = map.getOrPut(uid) { LongArray(2) }
+                    arr[0] += bucket.rxBytes
+                    arr[1] += bucket.txBytes
+                }
+                stats.close()
+                if (map.isNotEmpty()) break
+            } catch (_: Exception) {}
+        }
 
         val pm = context.packageManager
         val list = mutableListOf<AppUidUsage>()
@@ -1507,7 +1764,10 @@ Analyse ces mesures matérielles réelles issues du téléphone de l'utilisateur
         val isExhaustion = upperBody.contains("DATA_4G BALANCE IS 0") ||
             upperBody.contains("BALANCE IS 0 NOW") ||
             upperBody.contains("EPUISE") || upperBody.contains("ÉPUISÉ") ||
-            upperBody.contains("EXPIRED")
+            upperBody.contains("TERMINE") || upperBody.contains("TERMINÉ") ||
+            upperBody.contains("0 MO RESTANT") || upperBody.contains("0 MB LEFT") ||
+            upperBody.contains("EXPIRED") || upperBody.contains("EXPIRE") ||
+            upperBody.contains("EXPIRÉ")
 
         val mbMatch = Regex("""(\d+(?:[.,]\d+)?)\s*(MB|MO|GB|GO)""", RegexOption.IGNORE_CASE).find(body)
         var promisedMb = 0.0
@@ -1525,10 +1785,11 @@ Analyse ces mesures matérielles réelles issues du téléphone de l'utilisateur
             currencyLabel = priceMatch.groupValues[2].uppercase()
         }
 
-        val isActivation = promisedMb > 0.0 && (
+        val isActivation = !isExhaustion && promisedMb > 0.0 && (
             upperBody.contains("FELICITATIONS") || upperBody.contains("FÉLICITATIONS") ||
                 upperBody.contains("DROIT A") || upperBody.contains("ACTIV") ||
-                upperBody.contains("SUBSCRIBED") || upperBody.contains("VALIDE")
+                upperBody.contains("SOUSCRIT") || upperBody.contains("SUBSCRIBED") ||
+                upperBody.contains("VALIDE")
             )
 
         val planName = when {

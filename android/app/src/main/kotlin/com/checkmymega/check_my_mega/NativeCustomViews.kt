@@ -1025,12 +1025,14 @@ class RadialVeracityGaugeView(
         val session = engine.activeSession ?: return
         val dark = engine.settings.isDarkMode
         val isNeutral = session.isNeutralMonitor || session.promisedMb <= 0.0
-        val pct = if (isNeutral) 100.0 else session.veracityScorePct.coerceIn(0.0, 100.0)
+        val rawPct = if (isNeutral) 100.0 else session.rawConsumedPct
+        val arcPct = rawPct.coerceIn(0.0, 100.0)
         val accent = when {
             isNeutral -> Color.parseColor("#0284C7")
-            pct >= 90.0 -> Color.parseColor("#10B981")
-            pct >= 70.0 -> Color.parseColor("#0284C7")
-            else -> Color.parseColor("#F59E0B")
+            session.isOverrun -> Color.parseColor("#F59E0B")
+            session.isExhausted && rawPct < 85.0 -> Color.parseColor("#EF4444")
+            rawPct >= 85.0 -> Color.parseColor("#10B981")
+            else -> Color.parseColor("#0284C7")
         }
 
         val cx = dp(68f)
@@ -1043,19 +1045,19 @@ class RadialVeracityGaugeView(
         canvas.drawArc(arcRect, 135f, 270f, false, arcPaint)
 
         arcPaint.color = accent
-        val sweep = if (isNeutral) 270f else (270f * (pct / 100.0)).toFloat().coerceAtLeast(6f)
+        val sweep = if (isNeutral) 270f else (270f * (arcPct / 100.0)).toFloat().coerceAtLeast(6f)
         canvas.drawArc(arcRect, 135f, sweep, false, arcPaint)
 
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.color = if (dark) Color.parseColor("#94A3B8") else Color.parseColor("#64748B")
         textPaint.textSize = dp(9f)
         textPaint.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        canvas.drawText(if (isNeutral) "SONDE SIM" else "REÇU OS", cx, cy - dp(10f), textPaint)
+        canvas.drawText(if (isNeutral) "SONDE OS" else "MESURE OS", cx, cy - dp(10f), textPaint)
 
         textPaint.color = if (dark) Color.parseColor("#F8FAFC") else Color.parseColor("#0F172A")
-        textPaint.textSize = dp(16.5f)
+        textPaint.textSize = dp(16f)
         canvas.drawText(
-            if (isNeutral) "24h Live" else "${String.format("%.1f", pct)}%",
+            if (isNeutral) "24h Live" else "${String.format("%.1f", rawPct)}%",
             cx,
             cy + dp(10f),
             textPaint
@@ -1064,22 +1066,24 @@ class RadialVeracityGaugeView(
         val rxX = dp(138f)
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.color = if (dark) Color.parseColor("#94A3B8") else Color.parseColor("#64748B")
-        textPaint.textSize = dp(10.5f)
+        textPaint.textSize = dp(10f)
         textPaint.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        canvas.drawText("VOLUME RÉEL MESURÉ PAR ANDROID", rxX, cy - dp(26f), textPaint)
+        canvas.drawText("CONSOMMATION LOCALE ANDROID", rxX, cy - dp(26f), textPaint)
 
         textPaint.color = if (dark) Color.parseColor("#F8FAFC") else Color.parseColor("#0F172A")
-        textPaint.textSize = dp(25f)
+        textPaint.textSize = dp(24f)
         canvas.drawText("${String.format("%.1f", session.measuredDecimalMb)} Mo", rxX, cy + dp(2f), textPaint)
 
         textPaint.color = if (dark) Color.parseColor("#CBD5E1") else Color.parseColor("#334155")
         textPaint.textSize = dp(12f)
         textPaint.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        val priceTxt = if (session.priceAmount > 0) " (${session.priceAmount} ${session.currencyLabel})" else ""
         canvas.drawText(
             if (isNeutral) {
                 "Binaire : ${String.format("%.1f", session.measuredBinaryMib)} Mio (24h)"
             } else {
-                "Forfait SMS : ${session.promisedMb.roundToInt()} Mo (${session.priceAmount} ${session.currencyLabel})"
+                val srcLabel = if (session.isManualAnchor) "Forfait manuel" else "Forfait SMS"
+                "$srcLabel : ${session.promisedMb.roundToInt()} Mo$priceTxt"
             },
             rxX,
             cy + dp(22f),
@@ -1089,15 +1093,12 @@ class RadialVeracityGaugeView(
         textPaint.color = if (dark) Color.parseColor("#94A3B8") else Color.parseColor("#64748B")
         textPaint.textSize = dp(11f)
         textPaint.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-        canvas.drawText(
-            if (isNeutral) {
-                "Rx ${String.format("%.1f", session.rxBytes / 1_000_000.0)} Mo • Tx ${String.format("%.1f", session.txBytes / 1_000_000.0)} Mo"
-            } else {
-                "Coût réel : ${session.realCostPerGb.roundToInt()} ${session.currencyLabel} / Go"
-            },
-            rxX,
-            cy + dp(39f),
-            textPaint
-        )
+        val footerLine = when {
+            isNeutral -> "Rx ${String.format("%.1f", session.rxBytes / 1_000_000.0)} Mo • Tx ${String.format("%.1f", session.txBytes / 1_000_000.0)} Mo"
+            session.isOverrun -> "Surplus OS : +${String.format("%.1f", session.overrunMb)} Mo"
+            session.isExhausted -> "Écart épuisement : -${session.missingMb.roundToInt()} Mo"
+            else -> "Reste estimé : ${String.format("%.1f", session.missingMb)} Mo"
+        }
+        canvas.drawText(footerLine, rxX, cy + dp(39f), textPaint)
     }
 }

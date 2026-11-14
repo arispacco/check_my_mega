@@ -113,20 +113,31 @@ data class BundleAuditSession(
     val isExhausted: Boolean,
     val workloadTag: String,
     val appUsages: List<AppUidUsage>,
-    val isNeutralMonitor: Boolean = false
+    val isNeutralMonitor: Boolean = false,
+    val includesPreActivationBucket: Boolean = false,
+    val isManualAnchor: Boolean = false
 ) {
     val totalBytes: Long get() = rxBytes + txBytes
     val measuredDecimalMb: Double get() = totalBytes / 1_000_000.0
     val measuredBinaryMib: Double get() = totalBytes / (1024.0 * 1024.0)
 
-    val veracityScorePct: Double
+    val rawConsumedPct: Double
         get() {
             if (promisedMb <= 0.0) return 100.0
-            return ((measuredDecimalMb / promisedMb) * 100.0).coerceIn(0.0, 100.0)
+            return ((measuredDecimalMb / promisedMb) * 100.0).coerceAtLeast(0.0)
         }
+
+    val veracityScorePct: Double
+        get() = if (promisedMb <= 0.0) 100.0 else rawConsumedPct.coerceIn(0.0, 100.0)
 
     val missingMb: Double
         get() = if (promisedMb > 0.0) max(0.0, promisedMb - measuredDecimalMb) else 0.0
+
+    val overrunMb: Double
+        get() = if (promisedMb > 0.0) max(0.0, measuredDecimalMb - promisedMb) else 0.0
+
+    val isOverrun: Boolean
+        get() = promisedMb > 0.0 && measuredDecimalMb > promisedMb
 
     val realCostPerGb: Double
         get() {
@@ -140,15 +151,24 @@ data class BundleAuditSession(
         val recu = String.format("%.1f", measuredDecimalMb)
         val recuMib = String.format("%.1f", measuredBinaryMib)
         if (isNeutralMonitor || promisedMb <= 0.0) {
-            return "Surveillance matérielle directe sur $carrierDisplayName : votre système Android a mesuré exactement $recu Mo décimaux ($recuMib Mio binaires) consommés sur les dernières 24h. Aucun forfait fictif n'est supposé en l'absence de SMS d'activation."
+            return "Surveillance matérielle locale sur $carrierDisplayName : Android a mesuré $recu Mo décimaux ($recuMib Mio binaires) sur les dernières 24h (compteur OS local, non fourni par le FAI)."
         }
         val promis = promisedMb.roundToInt()
         val manque = missingMb.roundToInt()
         val vraiPrix = realCostPerGb.roundToInt()
-        return if (veracityScorePct >= 90.0) {
-            "Forfait $carrierDisplayName conforme : sur $promis Mo souscrits ($priceAmount $currencyLabel), Android a bien reçu $recu Mo (${String.format("%.1f", veracityScorePct)}%). Coût réel : $vraiPrix $currencyLabel/Go."
-        } else {
-            "Écart détecté sur $carrierDisplayName ($planName à $priceAmount $currencyLabel) : sur $promis Mo annoncés par SMS, l'interface cellulaire n'a reçu que $recu Mo (${String.format("%.1f", veracityScorePct)}%). Volume non reçu : -$manque Mo (Coût réel : $vraiPrix $currencyLabel/Go)."
+        val pctTxt = String.format("%.1f", rawConsumedPct)
+        val priceNote = if (priceAmount > 0) " • Coût réel : $vraiPrix $currencyLabel/Go" else ""
+        return when {
+            isOverrun -> {
+                val extraTxt = String.format("%.1f", overrunMb)
+                "Dépassement OS sur $carrierDisplayName ($planName) : Android a mesuré $recu Mo sur $promis Mo annoncés ($pctTxt%, soit +$extraTxt Mo). Origine fréquente : tranche horaire OS de 2h antérieure au SMS, trafic bonus/zero-rating ou double SIM$priceNote."
+            }
+            isExhausted && missingMb > 0.0 ->
+                "Écart détecté après épuisement sur $carrierDisplayName ($planName) : sur $promis Mo annoncés, seulement $recu Mo mesurés par Android ($pctTxt%). Manque constaté : -$manque Mo$priceNote."
+            rawConsumedPct >= 90.0 ->
+                "Forfait $carrierDisplayName presque complet ou conforme : sur $promis Mo souscrits, Android a mesuré $recu Mo ($pctTxt%)$priceNote."
+            else ->
+                "Suivi local en cours sur $carrierDisplayName ($planName) : $recu Mo mesurés par Android sur $promis Mo ($pctTxt%). Reste théorique : $manque Mo$priceNote."
         }
     }
 
