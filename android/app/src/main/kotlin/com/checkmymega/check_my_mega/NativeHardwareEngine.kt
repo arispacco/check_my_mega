@@ -4,10 +4,7 @@ import android.Manifest
 import android.app.AppOpsManager
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -28,7 +25,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
-import android.provider.Telephony
 import android.telephony.CellIdentityLte
 import android.telephony.CellInfo
 import android.telephony.CellInfoLte
@@ -100,7 +96,6 @@ class NativeHardwareEngine(
     private var telephonyManager: TelephonyManager? = null
     private var locationManager: LocationManager? = null
     private var telephonyCallbackObj: Any? = null
-    private var smsReceiver: BroadcastReceiver? = null
     private var isPaused = false
 
     // Sensor fusion & ZUPT state
@@ -263,7 +258,6 @@ class NativeHardwareEngine(
         setupSensors()
         setupLocation()
         setupRealtimeTelephony()
-        registerSmsReceiver()
 
         bgExecutor.scheduleWithFixedDelay({
             if (!isPaused) {
@@ -302,7 +296,10 @@ class NativeHardwareEngine(
             isPaused = false
             setupSensors()
             setupLocation()
-            bgExecutor.execute { forceModemCellInfoRefresh() }
+            bgExecutor.execute {
+                forceModemCellInfoRefresh()
+                syncSmsAndBuildSessions()
+            }
         }
     }
 
@@ -315,7 +312,6 @@ class NativeHardwareEngine(
         setupSensors()
         setupLocation()
         setupRealtimeTelephony()
-        registerSmsReceiver()
         bgExecutor.execute {
             forceModemCellInfoRefresh()
             syncSmsAndBuildSessions()
@@ -328,12 +324,6 @@ class NativeHardwareEngine(
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && telephonyCallbackObj != null) {
                 telephonyManager?.unregisterTelephonyCallback(telephonyCallbackObj as TelephonyCallback)
-            }
-        } catch (_: Exception) {}
-        try {
-            if (smsReceiver != null) {
-                context.unregisterReceiver(smsReceiver)
-                smsReceiver = null
             }
         } catch (_: Exception) {}
         bgExecutor.shutdownNow()
@@ -1101,25 +1091,6 @@ class NativeHardwareEngine(
     // =========================================================================
     // 5. REAL SMS INBOX & NETWORKSTATS MANAGER (ZERO INVENTED BUNDLES!)
     // =========================================================================
-    private fun registerSmsReceiver() {
-        if (smsReceiver != null) return
-        smsReceiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context?, intent: Intent?) {
-                if (intent?.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
-                    bgExecutor.execute { syncSmsAndBuildSessions() }
-                }
-            }
-        }
-        try {
-            val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(smsReceiver, filter, Context.RECEIVER_EXPORTED)
-            } else {
-                context.registerReceiver(smsReceiver, filter)
-            }
-        } catch (_: Exception) {}
-    }
-
     private fun saveLiveTrafficAnchor(sessionStartMs: Long) {
         val nowMs = System.currentTimeMillis()
         val rx = TrafficStats.getMobileRxBytes().coerceAtLeast(0L)
