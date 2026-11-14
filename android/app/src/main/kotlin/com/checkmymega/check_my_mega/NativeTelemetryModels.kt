@@ -231,15 +231,21 @@ const val MOTION_THRESHOLD_MS2 = 0.4
 const val STATIONARY_GATE_NS = 1_000_000_000L
 
 /** Number of breadcrumb positions kept for the compass trail. */
-const val TRAIL_MAX_POINTS = 60
+const val TRAIL_MAX_POINTS = 240
 
-/** Live guidance toward the selected saved spot. [relTurnDeg] > 0 means "turn right". */
+/** Live guidance toward the selected saved spot via topological A* path. [relTurnDeg] > 0 means "turn right". */
 data class NavSnapshot(
     val spot: HouseRadarSpot,
     val distanceM: Double,
     val bearingDeg: Double,
     val relTurnDeg: Double,
-    val arrived: Boolean
+    val arrived: Boolean,
+    val straightDistanceM: Double = distanceM,
+    val nextTurnDistanceM: Double = distanceM,
+    val routeSteps: List<RouteStep> = emptyList(),
+    val justRerouted: Boolean = false,
+    val isDirectFallback: Boolean = false,
+    val hasBlockedSegments: Boolean = false
 ) {
     val approxSteps: Int get() = (distanceM / NAV_STRIDE_METERS).toInt().coerceAtLeast(0)
 }

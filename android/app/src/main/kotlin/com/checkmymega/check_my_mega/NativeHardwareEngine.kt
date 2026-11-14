@@ -77,6 +77,9 @@ class NativeHardwareEngine(
     /** Recent walked positions (x, y in metres) drawn as breadcrumbs on the compass. */
     val trail = CopyOnWriteArrayList<DoubleArray>()
 
+    /** Topological corridor graph used by A* routing and the video-game mini-map. */
+    val navGraph = IndoorNavigationGraph()
+
     /**
      * Dead-reckoning coordinate frame of the current session. Spots saved in a previous session
      * live in another frame and are only navigable after [recalibrateAtSpot] adopts their frame.
@@ -196,6 +199,16 @@ class NativeHardwareEngine(
                 }
             } catch (_: Exception) {}
         }
+        navGraph.clear(seedOrigin = true)
+    }
+
+    private fun saveGraphToDisk() {
+        try {
+            prefs.edit()
+                .putLong("indoorGraphFrameId", currentFrameId)
+                .putString("indoorGraphJson", navGraph.toJsonString())
+                .apply()
+        } catch (_: Exception) {}
     }
 
     fun saveSettings() {
@@ -283,6 +296,7 @@ class NativeHardwareEngine(
 
     fun onPauseLifecycle() {
         isPaused = true
+        bgExecutor.execute { saveGraphToDisk() }
         try {
             sensorManager?.unregisterListener(this)
         } catch (_: Exception) {}
@@ -410,6 +424,7 @@ class NativeHardwareEngine(
                     state.posY += NAV_STRIDE_METERS * cos(rad)
                     trail.add(doubleArrayOf(state.posX, state.posY))
                     while (trail.size > TRAIL_MAX_POINTS) trail.removeAt(0)
+                    navGraph.recordMotionPoint(state.posX, state.posY)
                 }
             }
 
@@ -519,6 +534,7 @@ class NativeHardwareEngine(
             val gpsY = dLat * earthR
             state.posX = state.posX * 0.8 + gpsX * 0.2
             state.posY = state.posY * 0.8 + gpsY * 0.2
+            navGraph.recordMotionPoint(state.posX, state.posY)
         }
     }
 
@@ -827,6 +843,13 @@ class NativeHardwareEngine(
     // =========================================================================
     // 4. FORCED CELLULAR (TRANSPORT_CELLULAR) SPEED PROBE & PERSISTENT SPOTS
     // =========================================================================
+    private fun addAndPersistSpot(spot: HouseRadarSpot) {
+        navGraph.recordMotionPoint(spot.posX, spot.posY, spotId = spot.id, nowMs = spot.timestampMs)
+        radarSpots.add(0, spot)
+        saveRadarSpotsToDisk()
+        saveGraphToDisk()
+    }
+
     fun recordInstantSpot(roomLabel: String) {
         val sinrFactor = ((state.sinrDb + 5.0) / 25.0).coerceIn(0.08, 1.0)
         val rsrpFactor = ((state.rsrpDbm + 120.0) / 45.0).coerceIn(0.08, 1.0)
@@ -851,8 +874,7 @@ class NativeHardwareEngine(
             timestampMs = System.currentTimeMillis(),
             frameId = currentFrameId
         )
-        radarSpots.add(0, spot)
-        saveRadarSpotsToDisk()
+        addAndPersistSpot(spot)
         state.lastSpeedTestTransportLabel = "SIM 4G (Signal physique 0 Mo)"
         statusBanner = "Coin « $roomLabel » enregistré sur le signal physique SIM (${spot.rsrpDbm} dBm, SINR ${spot.sinrDb} dB)"
         notifyUi()
@@ -998,8 +1020,7 @@ class NativeHardwareEngine(
                     timestampMs = System.currentTimeMillis(),
                     frameId = currentFrameId
                 )
-                radarSpots.add(0, spot)
-                saveRadarSpotsToDisk()
+                addAndPersistSpot(spot)
                 statusBanner = if (usedPureRfFallback) {
                     "Aucun forfait data actif sur la SIM — « $roomLabel » classé sur le signal 4G pur (${state.rsrpDbm} dBm, ~${String.format("%.1f", measuredMbps)} Mbps)"
                 } else {
@@ -1017,14 +1038,16 @@ class NativeHardwareEngine(
         state.posX = 0.0
         state.posY = 0.0
         trail.clear()
+        navGraph.clear(seedOrigin = true)
         currentFrameId = System.currentTimeMillis()
+        prefs.edit().remove("indoorGraphJson").remove("indoorGraphFrameId").apply()
         navTargetSpotId = null
         navArrivedFlag = false
         baselinePressureHpa = state.pressureHpa
         state.relativeAltitudeMeters = 0.0
         gpsOriginLat = state.gpsLat
         gpsOriginLon = state.gpsLon
-        statusBanner = "Coins de la maison et origine 3D réinitialisés."
+        statusBanner = "Coins de la maison et graphe 2D réinitialisés."
         notifyUi()
     }
 
@@ -1050,29 +1073,72 @@ class NativeHardwareEngine(
         notifyUi()
     }
 
-    /** Live guidance (distance, bearing, turn angle, arrival) toward [navTargetSpot], or null. */
+    /** Manually flags the current suggested route segment as blocked by a wall or furniture. */
+    fun markCurrentRouteBlocked(): Boolean {
+        val blocked = navGraph.markCurrentRouteBlocked()
+        if (blocked) {
+            bgExecutor.execute { saveGraphToDisk() }
+            statusBanner = "Obstacle signalé — recalcul du plus court chemin..."
+            notifyUi()
+        }
+        return blocked
+    }
+
+    /** Clears all obstacle penalties so previously avoided corridors become eligible again. */
+    fun clearRouteObstacles() {
+        navGraph.resetRoutePenalties()
+        bgExecutor.execute { saveGraphToDisk() }
+        statusBanner = "Obstacles effacés — tous les passages sont réouverts."
+        notifyUi()
+    }
+
+    /** Live shortest-path guidance via the walkable topological graph toward [navTargetSpot], or null. */
     fun navSnapshot(): NavSnapshot? {
         val spot = navTargetSpot() ?: return null
-        val dx = spot.posX - state.posX
-        val dy = spot.posY - state.posY
-        val dist = sqrt(dx * dx + dy * dy)
-        navArrivedFlag = if (navArrivedFlag) dist <= NAV_LEAVE_RADIUS_M else dist <= NAV_ARRIVAL_RADIUS_M
-        val bearing = if (dist > 0.05) {
-            (Math.toDegrees(atan2(dx, dy)) + 360.0) % 360.0
+        val route = navGraph.computeRoute(state.posX, state.posY, spot)
+        val straightDist = route.straightDistanceM
+        val routeDist = route.totalRouteDistanceM
+
+        // Prevent premature "Arrivé" across a wall when an unwalked detour path remains
+        val withinArrivalRadius = straightDist <= NAV_ARRIVAL_RADIUS_M &&
+            (route.isDirectFallback || routeDist <= NAV_ARRIVAL_RADIUS_M * 1.75)
+        navArrivedFlag = if (navArrivedFlag) {
+            straightDist <= NAV_LEAVE_RADIUS_M
+        } else {
+            withinArrivalRadius
+        }
+
+        val wpDx = route.nextWaypointX - state.posX
+        val wpDy = route.nextWaypointY - state.posY
+        val wpDist = hypot(wpDx, wpDy)
+        val bearing = if (wpDist > 0.10) {
+            (Math.toDegrees(atan2(wpDx, wpDy)) + 360.0) % 360.0
         } else {
             spot.azimuthDeg
         }
         val rel = ((bearing - state.azimuthDeg + 540.0) % 360.0) - 180.0
-        return NavSnapshot(spot, dist, bearing, rel, navArrivedFlag)
+        return NavSnapshot(
+            spot = spot,
+            distanceM = routeDist,
+            bearingDeg = bearing,
+            relTurnDeg = rel,
+            arrived = navArrivedFlag,
+            straightDistanceM = straightDist,
+            nextTurnDistanceM = route.nextTurnDistanceM,
+            routeSteps = route.waypoints,
+            justRerouted = route.justRerouted,
+            isDirectFallback = route.isDirectFallback,
+            hasBlockedSegments = route.hasBlockedSegments
+        )
     }
 
     /**
      * Drift correction: the user stands on a saved spot and says so. The dead-reckoned position
-     * snaps to that spot and the session adopts its coordinate frame, which is also how spots
-     * saved in a previous session become navigable again.
+     * snaps to that spot and restores its saved topological corridor graph if available.
      */
     fun recalibrateAtSpot(spotId: String) {
         val spot = radarSpots.firstOrNull { it.id == spotId } ?: return
+        val frameChanged = spot.frameId != currentFrameId
         currentFrameId = spot.frameId
         state.posX = spot.posX
         state.posY = spot.posY
@@ -1082,6 +1148,20 @@ class NativeHardwareEngine(
             gpsOriginLat = state.gpsLat - Math.toDegrees(spot.posY / earthR)
             gpsOriginLon = state.gpsLon - Math.toDegrees(spot.posX / (earthR * cos(Math.toRadians(gpsOriginLat))))
         }
+        if (frameChanged) {
+            val savedFrameId = prefs.getLong("indoorGraphFrameId", 0L)
+            if (savedFrameId == spot.frameId) {
+                navGraph.loadFromJsonString(prefs.getString("indoorGraphJson", null))
+            } else {
+                navGraph.clear(seedOrigin = false)
+            }
+            for (s in radarSpots) {
+                if (s.frameId == spot.frameId) {
+                    navGraph.recordMotionPoint(s.posX, s.posY, spotId = s.id, nowMs = s.timestampMs)
+                }
+            }
+        }
+        navGraph.snapToSpot(spot.id, spot.posX, spot.posY)
         trail.clear()
         navArrivedFlag = false
         statusBanner = "Position recalée sur « ${spot.roomLabel} »"
