@@ -47,7 +47,9 @@ class MainActivity : Activity() {
 
     private var selectedTabIndex: Int = 0
     private var selectedRoomLabel: String = "Salon"
-    private var showAdvancedRfDetails: Boolean = false
+    private var showHomeMoreInfo: Boolean = false
+    private var showCompassMoreInfo: Boolean = false
+    private var showAiMoreInfo: Boolean = false
     private var showAllSmsItems: Boolean = false
 
     private lateinit var rootLayout: LinearLayout
@@ -611,7 +613,7 @@ class MainActivity : Activity() {
     }
 
     // =========================================================================
-    // TAB 0: ACCUEIL, COMPTEUR OS, VENTILATEUR PAR APP & SMS
+    // TAB 0: ACCUEIL ÉPURÉ + DÉTAILS EXPANSIBLES
     // =========================================================================
     private fun buildTab0HomeAndApps(container: LinearLayout) {
         container.removeAllViews()
@@ -619,7 +621,164 @@ class MainActivity : Activity() {
         val st = engine.state
         val activeIsp = IspBrand.fromText("${st.simOperatorCode} ${st.operatorName}")
 
-        // 1. SIM & Network Status Card
+        // Slim setup notice only when critical permissions are missing and details are collapsed
+        if (hasAnyMissingSetupPermission() && !showHomeMoreInfo) {
+            container.addView(
+                buildIconActionButton(
+                    VectorIconType.SHIELD_CHECK,
+                    "Autorisations requises • Touchez pour configurer",
+                    if (isDark) "#2A1F0A" else "#FFFBEB",
+                    "#D97706",
+                    "#F59E0B"
+                ) {
+                    showHomeMoreInfo = true
+                    rebuildAllTabs()
+                }
+            )
+            container.addView(spaceView(14f))
+        }
+
+        // Primary focus: ONLY global data consumption card
+        if (session != null) {
+            val gaugeCard = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
+                background = cardDrawable()
+            }
+
+            val topRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            topRow.addView(OperatorBrandLogoView(this, session.isp.logoKey, 40f))
+            val topCol = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12f), 0, 0, 0)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            topCol.addView(TextView(this).apply {
+                text = session.planName
+                setTextColor(textPrimaryCol)
+                textSize = 16f
+                setTypeface(typeface, Typeface.BOLD)
+            })
+            topCol.addView(TextView(this).apply {
+                text = "${activeIsp.shortName} • ${session.workloadTag}"
+                setTextColor(textSecondaryCol)
+                textSize = 12f
+            })
+            topRow.addView(topCol)
+            gaugeCard.addView(topRow)
+            gaugeCard.addView(spaceView(10f))
+
+            val gView = radialGaugeView ?: RadialVeracityGaugeView(this, engine).also {
+                radialGaugeView = it
+            }
+            (gView.parent as? ViewGroup)?.removeView(gView)
+            gaugeCard.addView(gView)
+
+            if (session.includesPreActivationBucket) {
+                gaugeCard.addView(spaceView(6f))
+                gaugeCard.addView(TextView(this).apply {
+                    text = "Android regroupe l'historique OS par tranches de 2h : le trafic juste avant le SMS dans cette tranche est inclus."
+                    setTextColor(Color.parseColor("#D97706"))
+                    textSize = 11.5f
+                })
+            }
+
+            gaugeCard.addView(spaceView(14f))
+            gaugeCard.addView(
+                buildMoreInfoToggleButton(showHomeMoreInfo) {
+                    showHomeMoreInfo = !showHomeMoreInfo
+                    rebuildAllTabs()
+                }
+            )
+            container.addView(gaugeCard)
+        }
+
+        if (showHomeMoreInfo) {
+            container.addView(spaceView(16f))
+
+            val quickActionsCard = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
+                background = cardDrawable()
+            }
+            val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            btnRow.addView(
+                buildIconActionButton(
+                    VectorIconType.REFRESH,
+                    "Actualiser SMS",
+                    if (isDark) "#1E293B" else "#F0F9FF",
+                    "#0284C7",
+                    if (isDark) "#334155" else "#BAE6FD"
+                ) {
+                    engine.syncSmsAndBuildSessions()
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        rightMargin = dp(8f)
+                    }
+                }
+            )
+            btnRow.addView(
+                buildIconActionButton(
+                    VectorIconType.AI_SPARK,
+                    "Audit IA Gemma",
+                    "#0284C7",
+                    "#FFFFFF",
+                    "#0284C7"
+                ) {
+                    selectTab(2)
+                    engine.runGemmaAiAudit()
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                }
+            )
+            quickActionsCard.addView(btnRow)
+            quickActionsCard.addView(spaceView(10f))
+            quickActionsCard.addView(
+                buildIconActionButton(
+                    VectorIconType.BOLT,
+                    "Définir un forfait manuel / Remettre à 0 Mo",
+                    subtleBgHex,
+                    if (isDark) "#F8FAFC" else "#0F172A",
+                    borderHex
+                ) {
+                    showManualBundleDialog()
+                }
+            )
+            if (engine.manualStartMs > 0L) {
+                quickActionsCard.addView(spaceView(8f))
+                quickActionsCard.addView(
+                    buildIconActionButton(
+                        VectorIconType.REFRESH,
+                        "Revenir à la détection SMS automatique",
+                        subtleBgHex,
+                        "#EF4444",
+                        borderHex
+                    ) {
+                        engine.clearManualBundle()
+                        rebuildAllTabs()
+                    }
+                )
+            }
+            container.addView(quickActionsCard)
+            container.addView(spaceView(16f))
+
+            if (hasAnyMissingSetupPermission()) {
+                container.addView(buildPermissionsDiagnosticCard(showAllGrantedNotice = false))
+                container.addView(spaceView(16f))
+            }
+
+            container.addView(buildHomeSimCard(activeIsp, st))
+            container.addView(spaceView(16f))
+            container.addView(buildHomeAppsCard(session))
+            container.addView(spaceView(16f))
+            container.addView(buildHomeSmsCard())
+        }
+    }
+
+    private fun buildHomeSimCard(activeIsp: IspBrand, st: LiveRadioAndSensorState): LinearLayout {
         val simCard = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -650,90 +809,10 @@ class MainActivity : Activity() {
             textSize = 12f
         })
         simCard.addView(simCol)
-        container.addView(simCard)
-        container.addView(spaceView(18f))
+        return simCard
+    }
 
-        if (hasAnyMissingSetupPermission()) {
-            container.addView(buildPermissionsDiagnosticCard(showAllGrantedNotice = false))
-            container.addView(spaceView(18f))
-        }
-
-        // 2. Active OS Data Counter / SMS Bundle Card
-        if (session != null) {
-            val gaugeCard = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
-                background = cardDrawable()
-            }
-
-            val topRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            topRow.addView(OperatorBrandLogoView(this, session.isp.logoKey, 40f))
-            val topCol = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(12f), 0, 0, 0)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            topCol.addView(TextView(this).apply {
-                text = session.planName
-                setTextColor(textPrimaryCol)
-                textSize = 16f
-                setTypeface(typeface, Typeface.BOLD)
-            })
-            topCol.addView(TextView(this).apply {
-                text = session.workloadTag
-                setTextColor(textSecondaryCol)
-                textSize = 12f
-            })
-            topRow.addView(topCol)
-            gaugeCard.addView(topRow)
-            gaugeCard.addView(spaceView(10f))
-
-            val gView = radialGaugeView ?: RadialVeracityGaugeView(this, engine).also {
-                radialGaugeView = it
-            }
-            (gView.parent as? ViewGroup)?.removeView(gView)
-            gaugeCard.addView(gView)
-            gaugeCard.addView(spaceView(12f))
-
-            val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            btnRow.addView(
-                buildIconActionButton(
-                    VectorIconType.REFRESH,
-                    "Actualiser SMS",
-                    if (isDark) "#1E293B" else "#F0F9FF",
-                    "#0284C7",
-                    if (isDark) "#334155" else "#BAE6FD"
-                ) {
-                    engine.syncSmsAndBuildSessions()
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        rightMargin = dp(8f)
-                    }
-                }
-            )
-            btnRow.addView(
-                buildIconActionButton(
-                    VectorIconType.AI_SPARK,
-                    "Diagnostic IA Gemma",
-                    "#0284C7",
-                    "#FFFFFF",
-                    "#0284C7"
-                ) {
-                    selectTab(2)
-                    engine.runGemmaAiAudit()
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                }
-            )
-            gaugeCard.addView(btnRow)
-            container.addView(gaugeCard)
-            container.addView(spaceView(20f))
-        }
-
-        // 3. Per-App Consumption Breakdown (Genuine Installed App Icons!)
+    private fun buildHomeAppsCard(session: BundleAuditSession?): LinearLayout {
         val appsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
@@ -831,10 +910,10 @@ class MainActivity : Activity() {
                 })
             }
         }
-        container.addView(appsCard)
-        container.addView(spaceView(20f))
+        return appsCard
+    }
 
-        // 4. Recent Operator SMS List
+    private fun buildHomeSmsCard(): LinearLayout {
         val smsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
@@ -935,17 +1014,30 @@ class MainActivity : Activity() {
                 }
             )
         }
-        container.addView(smsCard)
+        return smsCard
     }
 
     // =========================================================================
-    // TAB 1: BOUSSOLE 120Hz, COINS PERSONNALISÉS & CLASSEMENT MAISON
+    // TAB 1: BOUSSOLE ÉPURÉE + DÉTAILS RADIO & COINS EXPANSIBLES
     // =========================================================================
     private fun buildTab1CompassAndSpots(container: LinearLayout) {
         container.removeAllViews()
+        liveHudCarrierTv = null
+        liveHudBandTv = null
+        liveHudDistTv = null
+        liveBentoRsrpValTv = null
+        liveBentoRsrpSubTv = null
+        liveBentoSinrValTv = null
+        liveBentoSinrSubTv = null
+        liveBentoSpeedValTv = null
+        liveBentoSpeedSubTv = null
+        liveBentoLocValTv = null
+        liveBentoLocSubTv = null
+
         val st = engine.state
         val activeIsp = IspBrand.fromText("${st.simOperatorCode} ${st.operatorName}")
 
+        // Primary focus: ONLY compass radar + guidance + capture CTA + "Plus d'informations"
         val compassCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
@@ -956,26 +1048,82 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        headRow.addView(OperatorBrandLogoView(this, activeIsp.logoKey, 40f))
+        headRow.addView(OperatorBrandLogoView(this, activeIsp.logoKey, 38f))
         val headCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12f), 0, 0, 0)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         headCol.addView(TextView(this).apply {
-            text = "Boussole de retour au point (120 Hz)"
+            text = "Boussole Signal (${activeIsp.shortName})"
             setTextColor(textPrimaryCol)
             textSize = 16.5f
             setTypeface(typeface, Typeface.BOLD)
         })
         headCol.addView(TextView(this).apply {
-            text = "Capturez un coin : la flèche vous y ramène, la distance baisse à chaque pas"
+            text = "Suivez la flèche vers le meilleur coin ou capturez ici"
             setTextColor(textSecondaryCol)
             textSize = 12f
         })
         headRow.addView(headCol)
         compassCard.addView(headRow)
+        compassCard.addView(spaceView(10f))
+
+        val cView = compassRadarView ?: WayfinderCompassRadarView(this, engine).also {
+            compassRadarView = it
+        }
+        (cView.parent as? ViewGroup)?.removeView(cView)
+        compassCard.addView(cView)
+        compassCard.addView(spaceView(10f))
+
+        liveGuidanceBannerTv = TextView(this).apply {
+            text = guidanceText()
+            setTextColor(Color.parseColor("#0284C7"))
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
+            background = pillDrawable(if (isDark) "#0F172A" else "#F0F9FF", if (isDark) "#1E293B" else "#BAE6FD", 14f)
+        }
+        compassCard.addView(liveGuidanceBannerTv)
         compassCard.addView(spaceView(12f))
+
+        compassCard.addView(
+            buildIconActionButton(
+                VectorIconType.LOCATION_PIN,
+                "Capturer « $selectedRoomLabel » (0 Mo)",
+                "#0284C7",
+                "#FFFFFF",
+                "#0284C7"
+            ) {
+                engine.recordInstantSpot(selectedRoomLabel)
+                rebuildAllTabs()
+            }
+        )
+        compassCard.addView(spaceView(10f))
+        compassCard.addView(
+            buildMoreInfoToggleButton(showCompassMoreInfo) {
+                showCompassMoreInfo = !showCompassMoreInfo
+                rebuildAllTabs()
+            }
+        )
+        container.addView(compassCard)
+
+        if (showCompassMoreInfo) {
+            container.addView(spaceView(16f))
+            container.addView(buildCompassControlsCard(st))
+            container.addView(spaceView(16f))
+            container.addView(buildCompassSpotsCard())
+            container.addView(spaceView(16f))
+            container.addView(buildCompassTechBentoCard(st))
+        }
+    }
+
+    private fun buildCompassControlsCard(st: LiveRadioAndSensorState): LinearLayout {
+        val ctrlCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18f), dp(16f), dp(18f), dp(16f))
+            background = cardDrawable()
+        }
 
         val hudRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1005,31 +1153,12 @@ class MainActivity : Activity() {
         hudRow.addView(liveHudCarrierTv)
         hudRow.addView(liveHudBandTv)
         hudRow.addView(liveHudDistTv)
-        compassCard.addView(hudRow)
-        compassCard.addView(spaceView(10f))
+        ctrlCard.addView(hudRow)
+        ctrlCard.addView(spaceView(12f))
 
-        val cView = compassRadarView ?: WayfinderCompassRadarView(this, engine).also {
-            compassRadarView = it
-        }
-        (cView.parent as? ViewGroup)?.removeView(cView)
-        compassCard.addView(cView)
-        compassCard.addView(spaceView(12f))
-
-        liveGuidanceBannerTv = TextView(this).apply {
-            text = guidanceText()
-            setTextColor(Color.parseColor("#0284C7"))
-            textSize = 13f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
-            background = pillDrawable(if (isDark) "#0F172A" else "#F0F9FF", if (isDark) "#1E293B" else "#BAE6FD", 14f)
-        }
-        compassCard.addView(liveGuidanceBannerTv)
-        compassCard.addView(spaceView(14f))
-
-        // Target selector: which saved spot should the arrow lead to?
         val navSpots = engine.navigableSpots().sortedByDescending { it.compositeScore }
         if (navSpots.isNotEmpty()) {
-            compassCard.addView(TextView(this).apply {
+            ctrlCard.addView(TextView(this).apply {
                 text = "Aller vers :"
                 setTextColor(textSecondaryCol)
                 textSize = 12.5f
@@ -1049,11 +1178,11 @@ class MainActivity : Activity() {
                 )
             }
             targetScroll.addView(targetRow)
-            compassCard.addView(targetScroll)
-            compassCard.addView(spaceView(14f))
+            ctrlCard.addView(targetScroll)
+            ctrlCard.addView(spaceView(12f))
         }
 
-        compassCard.addView(TextView(this).apply {
+        ctrlCard.addView(TextView(this).apply {
             text = "Sélectionnez le coin où vous vous trouvez :"
             setTextColor(textSecondaryCol)
             textSize = 12.5f
@@ -1061,9 +1190,7 @@ class MainActivity : Activity() {
             setPadding(0, 0, 0, dp(8f))
         })
 
-        val roomScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
+        val roomScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         val roomRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1092,7 +1219,7 @@ class MainActivity : Activity() {
 
         for (room in engine.customRooms) {
             val isSel = room == selectedRoomLabel
-            val chip = TextView(this).apply {
+            roomRow.addView(TextView(this).apply {
                 text = room
                 setTextColor(if (isSel) Color.parseColor("#0284C7") else textSecondaryCol)
                 textSize = 12.5f
@@ -1111,48 +1238,27 @@ class MainActivity : Activity() {
                     selectedRoomLabel = room
                     rebuildAllTabs()
                 }
-            }
-            roomRow.addView(chip)
+            })
         }
         roomScroll.addView(roomRow)
-        compassCard.addView(roomScroll)
-        compassCard.addView(spaceView(14f))
+        ctrlCard.addView(roomScroll)
+        ctrlCard.addView(spaceView(12f))
 
-        val actionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        actionRow.addView(
-            buildIconActionButton(
-                VectorIconType.LOCATION_PIN,
-                "Capturer $selectedRoomLabel (0 Mo)",
-                if (isDark) "#1E293B" else "#F0F9FF",
-                "#0284C7",
-                "#0284C7"
-            ) {
-                engine.recordInstantSpot(selectedRoomLabel)
-                rebuildAllTabs()
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    rightMargin = dp(8f)
-                }
-            }
-        )
-        actionRow.addView(
+        ctrlCard.addView(
             buildIconActionButton(
                 VectorIconType.BOLT,
-                if (st.isRunningSpeedTest) "Test 4G..." else "Débit SIM 4G",
+                if (st.isRunningSpeedTest) "Test 4G..." else "Tester le débit réel SIM 4G",
                 "#0284C7",
                 "#FFFFFF",
                 "#0284C7"
             ) {
                 engine.runActiveSpeedProbeAndRecord(selectedRoomLabel)
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
         )
-        compassCard.addView(actionRow)
-        container.addView(compassCard)
-        container.addView(spaceView(20f))
+        return ctrlCard
+    }
 
-        // 2. Persistent Ranked House Spots Card
+    private fun buildCompassSpotsCard(): LinearLayout {
         val spotsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
@@ -1267,61 +1373,46 @@ class MainActivity : Activity() {
                 }
             )
         }
-        container.addView(spotsCard)
-        container.addView(spaceView(20f))
+        return spotsCard
+    }
 
-        container.addView(
-            buildIconActionButton(
-                if (showAdvancedRfDetails) VectorIconType.CHEVRON_UP else VectorIconType.CHEVRON_DOWN,
-                if (showAdvancedRfDetails) "Masquer les détails techniques radio" else "Afficher les détails techniques radio (RSRP, SINR, Altitude Z)",
-                cardBgHex,
-                if (isDark) "#94A3B8" else "#475569",
-                borderHex
-            ) {
-                showAdvancedRfDetails = !showAdvancedRfDetails
-                rebuildAllTabs()
-            }
-        )
-
-        if (showAdvancedRfDetails) {
-            container.addView(spaceView(12f))
-            val bentoCard = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
-                background = cardDrawable()
-            }
-            val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            val tRsrp = buildLiveBentoTile("PUISSANCE SIM (RSRP)", "${st.rsrpDbm} dBm", st.signalQualityLabel)
-            liveBentoRsrpValTv = tRsrp.second
-            liveBentoRsrpSubTv = tRsrp.third
-
-            val tSinr = buildLiveBentoTile("QUALITÉ SINR & CQI", "${st.sinrDb} dB", "RSRQ ${st.rsrqDb} dB • CQI ${st.cqi}/15")
-            liveBentoSinrValTv = tSinr.second
-            liveBentoSinrSubTv = tSinr.third
-
-            row1.addView(tRsrp.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8f) })
-            row1.addView(tSinr.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            bentoCard.addView(row1)
-            bentoCard.addView(spaceView(8f))
-
-            val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            val tSpeed = buildLiveBentoTile("TRANSPORT MESURE", "${String.format("%.2f", st.lastActiveSpeedMbps)} Mbps", st.lastSpeedTestTransportLabel)
-            liveBentoSpeedValTv = tSpeed.second
-            liveBentoSpeedSubTv = tSpeed.third
-
-            val tLoc = buildLiveBentoTile("BAROMÈTRE & PAS 3D", "Hauteur Z : ${String.format("%+.1f", st.relativeAltitudeMeters)}m", "${st.stepCount} pas • ${st.pressureHpa.roundToInt()} hPa")
-            liveBentoLocValTv = tLoc.second
-            liveBentoLocSubTv = tLoc.third
-
-            row2.addView(tSpeed.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8f) })
-            row2.addView(tLoc.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            bentoCard.addView(row2)
-            container.addView(bentoCard)
+    private fun buildCompassTechBentoCard(st: LiveRadioAndSensorState): LinearLayout {
+        val bentoCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
+            background = cardDrawable()
         }
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tRsrp = buildLiveBentoTile("PUISSANCE SIM (RSRP)", "${st.rsrpDbm} dBm", st.signalQualityLabel)
+        liveBentoRsrpValTv = tRsrp.second
+        liveBentoRsrpSubTv = tRsrp.third
+
+        val tSinr = buildLiveBentoTile("QUALITÉ SINR & CQI", "${st.sinrDb} dB", "RSRQ ${st.rsrqDb} dB • CQI ${st.cqi}/15")
+        liveBentoSinrValTv = tSinr.second
+        liveBentoSinrSubTv = tSinr.third
+
+        row1.addView(tRsrp.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8f) })
+        row1.addView(tSinr.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bentoCard.addView(row1)
+        bentoCard.addView(spaceView(8f))
+
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tSpeed = buildLiveBentoTile("TRANSPORT MESURE", "${String.format("%.2f", st.lastActiveSpeedMbps)} Mbps", st.lastSpeedTestTransportLabel)
+        liveBentoSpeedValTv = tSpeed.second
+        liveBentoSpeedSubTv = tSpeed.third
+
+        val tLoc = buildLiveBentoTile("BAROMÈTRE & PAS 3D", "Hauteur Z : ${String.format("%+.1f", st.relativeAltitudeMeters)}m", "${st.stepCount} pas • ${st.pressureHpa.roundToInt()} hPa")
+        liveBentoLocValTv = tLoc.second
+        liveBentoLocSubTv = tLoc.third
+
+        row2.addView(tSpeed.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8f) })
+        row2.addView(tLoc.first, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bentoCard.addView(row2)
+        return bentoCard
     }
 
     // =========================================================================
-    // TAB 2: AUDIT IA (GEMMA) & CERTIFICAT MATÉRIEL
+    // TAB 2: AUDIT IA ÉPURÉ + CERTIFICAT TECHNIQUE EXPANSIBLE
     // =========================================================================
     private fun buildTab2AiAuditGemma(container: LinearLayout) {
         container.removeAllViews()
@@ -1329,6 +1420,7 @@ class MainActivity : Activity() {
         val st = engine.state
         val activeIsp = IspBrand.fromText("${st.simOperatorCode} ${st.operatorName}")
 
+        // Primary focus: ONLY AI diagnostic verdict & launch action
         val aiCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20f), dp(20f), dp(20f), dp(20f))
@@ -1353,9 +1445,9 @@ class MainActivity : Activity() {
         })
         topCol.addView(TextView(this).apply {
             text = if (engine.settings.aiApiKey.isNotBlank() || engine.settings.aiProvider == "ollama_local") {
-                "Connecté à ${engine.settings.aiProvider} • Analyse de vos vraies mesures"
+                "Connecté à ${engine.settings.aiProvider} • Analyse directe"
             } else {
-                "Mode local actif • Configurez votre clé API Gemma dans Paramètres"
+                "Mode local actif • Clé API optionnelle dans Paramètres"
             }
             setTextColor(textSecondaryCol)
             textSize = 12f
@@ -1375,7 +1467,7 @@ class MainActivity : Activity() {
                 engine.runGemmaAiAudit()
             }
         )
-        aiCard.addView(spaceView(16f))
+        aiCard.addView(spaceView(14f))
 
         val reportBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1386,17 +1478,23 @@ class MainActivity : Activity() {
             text = if (st.lastGemmaReport.isNotBlank()) {
                 st.lastGemmaReport
             } else {
-                "Appuyez sur « Générer le Diagnostic IA Gemma » ci-dessus pour analyser la couverture ${st.operatorName} (${st.rsrpDbm} dBm), les coins de votre maison et votre consommation par application."
+                "Appuyez sur « Générer le Diagnostic IA Gemma » pour obtenir une synthèse claire de votre forfait et du signal ${st.operatorName}."
             }
             setTextColor(textPrimaryCol)
             textSize = 13.5f
         })
         aiCard.addView(reportBox)
+        aiCard.addView(spaceView(14f))
+        aiCard.addView(
+            buildMoreInfoToggleButton(showAiMoreInfo) {
+                showAiMoreInfo = !showAiMoreInfo
+                rebuildAllTabs()
+            }
+        )
         container.addView(aiCard)
-        container.addView(spaceView(20f))
 
-        // Hardware Certificate Card
-        if (session != null) {
+        if (showAiMoreInfo && session != null) {
+            container.addView(spaceView(16f))
             val certCard = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(20f), dp(20f), dp(20f), dp(20f))
@@ -1945,6 +2043,63 @@ class MainActivity : Activity() {
         box.addView(valTv)
         box.addView(subTv)
         return Triple(box, valTv, subTv)
+    }
+
+    private fun showManualBundleDialog() {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20f), dp(10f), dp(20f), dp(4f))
+        }
+        val mbInput = EditText(this).apply {
+            hint = "Volume du forfait en Mo (ex: 3000)"
+            setText("3000")
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setTextColor(Color.parseColor("#0F172A"))
+            setHintTextColor(Color.parseColor("#94A3B8"))
+            textSize = 15f
+        }
+        val priceInput = EditText(this).apply {
+            hint = "Prix optionnel (${engine.state.currencyLabel}, ex: 1000)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setTextColor(Color.parseColor("#0F172A"))
+            setHintTextColor(Color.parseColor("#94A3B8"))
+            textSize = 14f
+        }
+        layout.addView(mbInput)
+        layout.addView(spaceView(8f))
+        layout.addView(priceInput)
+
+        @Suppress("DEPRECATION")
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
+            .setTitle("Suivi manuel à partir de 0 Mo")
+            .setMessage("Utile sans permission SMS ou pour démarrer un compteur exact dès maintenant :")
+            .setView(layout)
+            .setPositiveButton("Démarrer à 0 Mo") { _, _ ->
+                val mb = mbInput.text?.toString()?.trim()?.toDoubleOrNull() ?: 0.0
+                val price = priceInput.text?.toString()?.trim()?.toIntOrNull() ?: 0
+                if (mb > 0.0) {
+                    engine.setManualBundle(mb, price)
+                    rebuildAllTabs()
+                    Toast.makeText(this, "Suivi démarré à 0,0 Mo pour ${mb.roundToInt()} Mo", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
+    private fun buildMoreInfoToggleButton(expanded: Boolean, onToggle: () -> Unit): LinearLayout {
+        val label = if (expanded) "Masquer les détails" else "Plus d'informations"
+        val fgHex = if (expanded) (if (isDark) "#CBD5E1" else "#334155") else "#0284C7"
+        val bgHex = if (expanded) subtleBgHex else (if (isDark) "#0F172A" else "#F0F9FF")
+        val bdHex = if (expanded) borderHex else "#0284C7"
+        return buildIconActionButton(
+            if (expanded) VectorIconType.CHEVRON_UP else VectorIconType.CHEVRON_DOWN,
+            label,
+            bgHex,
+            fgHex,
+            bdHex,
+            onToggle
+        )
     }
 
     private fun buildIconActionButton(
